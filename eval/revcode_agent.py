@@ -54,6 +54,7 @@ class RevCodeAgent(BaseInstalledAgent):
             "cd /opt/revcode && node dist/index.js --headless "
             f"--prompt {quoted_instruction} "
             f"--trajectory-out {quoted_trajectory} "
+            "--cwd /app "
             "--provider zai"
         )
         await self.exec_as_agent(environment, command=command)

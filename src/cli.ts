@@ -7,7 +7,7 @@ import type { LlmProvider } from "./llm/client.js";
 export interface CliArgs {
   /** Working directory for the agent. Defaults to cwd. */
   cwd: string;
-  /** Model identifier (e.g. "glm-4.6", "claude-sonnet-4-20250514"). */
+  /** Model identifier (e.g. "glm-4.7", "claude-sonnet-4-20250514"). */
   model: string;
   /** LLM provider to use. */
   provider?: LlmProvider;
@@ -24,7 +24,7 @@ export interface CliArgs {
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     cwd: process.cwd(),
-    model: "glm-4.6",
+    model: "glm-4.7",
     headless: false,
     maxIterations: 25,
   };

@@ -20,7 +20,7 @@ echo 'needle' > /tmp/agent_bench/src/hidden.txt
 echo '# readme' > /tmp/agent_bench/docs/readme.md
 ```
 
-Set `ANTHROPIC_API_KEY` in `.env`, then run `python3 agent.py` from the repo root.
+Set `Z_AI_API_KEY` (or `ANTHROPIC_API_KEY` with `--provider anthropic`) in `.env`, then run `npm run dev` from the repo root.
 
 ---
 
@@ -30,7 +30,7 @@ Set `ANTHROPIC_API_KEY` in `.env`, then run `python3 agent.py` from the repo roo
 
 | Anti-pattern | What goes wrong | Fix |
 |---|---|---|
-| `run_command("find ...")` before checking structure | Spawns shell search when one `list_directory` call would locate the file | `list_directory` schema says to use it when locating files by name; system prompt says list before read when paths are unknown |
+| `shell("find ...")` before checking structure | Spawns shell search when one `list_directory` call would locate the file | `list_directory` schema says to use it when locating files by name; system prompt says list before read when paths are unknown |
 | `read_file` on the result | Wastes a turn; user only asked for the path | `read_file` schema says not to use for discovery; only read when inspecting contents |
 
 **Expected efficient path:** `list_directory("/tmp/agent_bench")` → `list_directory("/tmp/agent_bench/src")` → answer with path.
@@ -43,7 +43,7 @@ Set `ANTHROPIC_API_KEY` in `.env`, then run `python3 agent.py` from the repo roo
 
 | Anti-pattern | What goes wrong | Fix |
 |---|---|---|
-| `run_command("ls")` instead of `list_directory` | Shell listing when a dedicated tool exists | `run_command` schema explicitly says not to use `ls` for directory listing |
+| `shell("ls")` instead of `list_directory` | Shell listing when a dedicated tool exists | `shell` schema explicitly says not to use `ls` for directory listing |
 | Reading files without listing first | May guess wrong filenames | System prompt: list before read when paths unknown |
 | Re-reading same file after error | Loops on bad paths | Tool errors return as `tool_result` text so the LLM can recover without crashing |
 
@@ -61,7 +61,7 @@ Set `ANTHROPIC_API_KEY` in `.env`, then run `python3 agent.py` from the repo roo
 | Writes script but never runs it | User asked for output, not just the file | System prompt: write full file, then run it |
 | No visibility into tool execution | Hard to debug during benchmarks | Executor prints `[tool_name(input)]` on each tool call |
 
-**Expected efficient path:** `write_file` → `run_command("python3 /tmp/agent_bench/lines.py")`.
+**Expected efficient path:** `write_file` → `shell("python3 /tmp/agent_bench/lines.py")`.
 
 ---
 
@@ -71,11 +71,11 @@ Set `ANTHROPIC_API_KEY` in `.env`, then run `python3 agent.py` from the repo roo
 
 | Anti-pattern | What goes wrong | Fix |
 |---|---|---|
-| `read_file` on every file | O(n) tool calls, slow on large trees | System prompt + `run_command` schema: use `rg 'import' /tmp/agent_bench` |
-| `run_command("grep -r ...")` when `rg` exists | Works but slower/noisier on large repos | Schema examples prefer `rg` |
+| `read_file` on every file | O(n) tool calls, slow on large trees | System prompt + `shell` schema: use `rg 'import' /tmp/agent_bench` |
+| `shell("grep -r ...")` when `rg` exists | Works but slower/noisier on large repos | Schema examples prefer `rg` |
 | `grep` without `-r` | Misses nested files | Schema shows recursive search patterns |
 
-**Expected efficient path:** `run_command("rg 'import' /tmp/agent_bench")` — one call.
+**Expected efficient path:** `shell("rg 'import' /tmp/agent_bench")` — one call.
 
 ---
 
@@ -85,21 +85,21 @@ Set `ANTHROPIC_API_KEY` in `.env`, then run `python3 agent.py` from the repo roo
 
 | Anti-pattern | What goes wrong | Fix |
 |---|---|---|
-| `read_file` every `.py` and count in prose | Many round trips, truncation risk | System prompt: use `wc`/`find` via `run_command` |
+| `read_file` every `.py` and count in prose | Many round trips, truncation risk | System prompt: use `wc`/`find` via `shell` |
 | No size context on `read_file` results | LLM re-reads or guesses | `read_file` now prefixes `[path — N lines, M chars]` |
 | `list_directory` with no entry count | LLM doesn't know scope | `list_directory` now prefixes `[path — N entries]` |
 
-**Expected efficient path:** `run_command("find /tmp/agent_bench -name '*.py' -exec cat {} + | wc -l")` or `wc -l` on known files after one `list_directory`.
+**Expected efficient path:** `shell("find /tmp/agent_bench -name '*.py' -exec cat {} + | wc -l")` or `wc -l` on known files after one `list_directory`.
 
 ---
 
 ## Executor-level fixes
 
-| Issue | Fix in `agent.py` |
+| Issue | Fix in `src/agent/agent.ts` |
 |---|---|
-| Huge tool output blows context | `MAX_TOOL_OUTPUT = 30000` with truncation marker |
-| Tool crash kills the loop | `execute_tool` catches exceptions, returns `Error: ...` as result |
-| Multi-step tool use | `run_tool_loop` keeps calling API until response has no `tool_use` blocks |
+| Huge tool output blows context | Tool handlers truncate large results before returning |
+| Tool crash kills the loop | Tool registry catches exceptions, returns error as tool result |
+| Multi-step tool use | Agent loop keeps calling LLM until no tool calls remain |
 | Conversation grows unbounded | `/clear` resets to system prompt only |
 | Debugging what the LLM sees | `/memory` dumps full messages list |
 
@@ -119,10 +119,9 @@ Set `ANTHROPIC_API_KEY` in `.env`, then run `python3 agent.py` from the repo roo
 ## Running live stress tests
 
 ```bash
-cd /Users/ayaangupta/RevCode/RevCode
-python3 -m pip install -r requirements.txt
-# add key to .env
-python3 agent.py
+npm install
+# add Z_AI_API_KEY to .env
+npm run dev
 ```
 
 Run each task prompt above. Watch the `[tool_name(...)]` lines printed during execution. Use `/memory` after each task to inspect what was sent back to the model.

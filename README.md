@@ -36,7 +36,6 @@ src/
     └── diff.ts         # Diff utilities
 
 eval/                   # Harbor adapters for Terminal Bench
-agent.py                # Python Anthropic prototype
 ```
 
 ## Getting Started
@@ -53,7 +52,7 @@ npm run dev
 
 | Flag | Description |
 | ---- | ----------- |
-| `--model <name>` | Model id (default: `glm-4.6`) |
+| `--model <name>` | Model id (default: `glm-4.7`; suggested: `glm-5.2`, `glm-4.7`, `glm-4.7-flash`) |
 | `--provider <name>` | `zai`, `anthropic`, or `local-test` |
 | `--cwd <path>` | Working directory |
 | `--headless` | Run a single task and exit |

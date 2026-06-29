@@ -25,11 +25,15 @@
     "node": ">=20"
   },
   "devDependencies": {
+    "@types/figlet": "^1.7.0",
     "@types/node": "^22",
     "eslint": "^9",
     "tsx": "^4",
     "typescript": "^5.7",
     "vitest": "^3"
   },
-  "dependencies": {}
+  "dependencies": {
+    "figlet": "^1.11.0",
+    "gradient-string": "^3.0.0"
+  }
 }

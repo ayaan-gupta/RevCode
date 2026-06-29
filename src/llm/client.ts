@@ -8,7 +8,7 @@ import { AnthropicClient } from "./anthropic.js";
 import { extractToolCalls } from "./tool-call-parser.js";
 
 const ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
-const ZAI_DEFAULT_MODEL = "glm-4.5";
+const ZAI_DEFAULT_MODEL = "glm-4.7";
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -123,6 +123,7 @@ class ZaiClient implements LlmClient {
         tool_choice: "auto",
         temperature: 0.2,
       }),
+      signal: AbortSignal.timeout(180_000),
     });
 
     const responseText = await response.text();
