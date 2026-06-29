@@ -1,0 +1,4 @@
+# Harbor requires Python 3.12+
+harbor>=0.1.0
+anthropic>=0.40.0
+python-dotenv>=1.0.0

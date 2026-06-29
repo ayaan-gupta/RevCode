@@ -11,3 +11,11 @@ coverage/
 .cache/
 *.log
 .DS_Store
+
+# Harbor benchmark runs
+jobs/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
