@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "bundle": "node scripts/bundle.mjs",
     "dev": "tsx src/index.ts",
     "lint": "eslint src/",
     "test": "vitest run",
@@ -27,13 +28,14 @@
   "devDependencies": {
     "@types/figlet": "^1.7.0",
     "@types/node": "^22",
+    "esbuild": "^0.28.1",
     "eslint": "^9",
     "tsx": "^4",
     "typescript": "^5.7",
+    "typescript-eslint": "^8.62.1",
     "vitest": "^3"
   },
   "dependencies": {
-    "figlet": "^1.11.0",
-    "gradient-string": "^3.0.0"
+    "figlet": "^1.11.0"
   }
 }

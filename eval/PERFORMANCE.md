@@ -1,6 +1,37 @@
 # RevCode Benchmark Performance Notes
 
-Measurements from KV Store gRPC Harbor runs (June 2026).
+## Overhaul (2026-06-30)
+
+Major changes targeting the bottlenecks below:
+
+- **Persistent stateful shell** (`src/tools/shell-session.ts`): `cd`/env/venv and
+  background servers now persist across `shell` calls. Servers start with
+  `background: true` and return immediately (no more 120s foreground blocking).
+- **Cold-start eliminated**: the Harbor adapter now ships a single prebuilt
+  bundle (`dist/revcode.mjs` via `npm run bundle`) and skips
+  `npm install && npm run build` — removing the ~2 min/trial that caused
+  `AgentTimeoutError`.
+- **API resilience**: retry/backoff on 429/5xx/network in `src/llm/retry.ts`.
+- **Default model `glm-5.2`** (reasoning model — needs a generous `max_tokens`;
+  the client sets 16k). Max iterations raised to 50.
+- **Agentic prompt + verify-then-stop** to curb the over-iteration that ballooned
+  runtime, plus a plan tool and rule-based context compaction for long tasks.
+
+**Verified result (post-overhaul, glm-5.2, `jobs/revcode-kv-store-glm52-r7`):**
+**7/7 tests, reward 1.0, ~4.7 min** end-to-end (Docker via colima, amd64 emulated
+on arm64). Compare to the pre-overhaul passing run (`glm-4.6`, 20m 49s). The
+single-file bundle removed the ~2 min/trial cold start, and the persistent shell
+keeps the gRPC server alive for the verifier (the old stateless shell could not).
+
+**Terminal-Bench-2 subset (glm-5.2, `jobs/revcode-tb2-subset1`, run under
+qemu-emulated amd64 on arm64):** 5/7 passed —
+`cobol-modernization`, `count-dataset-tokens`, `fix-git`, `git-multibranch`,
+`overfull-hbox` ✅. Failures: `prove-plus-comm` (hard Coq proof — model limit),
+`regex-log` (transient DNS `ENOTFOUND` in-container — infra, not agent; motivated
+raising the API retry budget). Separately, compute-heavy brute-force tasks
+(e.g. `crack-7z-hash`) hit the 900s agent timeout purely due to emulation speed.
+
+Measurements below are from the pre-overhaul KV Store gRPC Harbor runs (June 2026).
 
 ## Oracle baseline (`jobs/oracle-kv-store`)
 

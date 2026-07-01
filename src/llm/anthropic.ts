@@ -2,7 +2,15 @@
  * Anthropic Messages API client.
  */
 
-import type { LlmClient, LlmMessage, LlmResponse, LlmToolCall, ToolDefinition } from "./client.js";
+import type {
+  CompleteOptions,
+  LlmClient,
+  LlmMessage,
+  LlmResponse,
+  LlmToolCall,
+  ToolDefinition,
+} from "./client.js";
+import { fetchWithRetry } from "./retry.js";
 
 const ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-4-20250514";
 const ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages";
@@ -16,7 +24,11 @@ export class AnthropicClient implements LlmClient {
     this.model = model || ANTHROPIC_DEFAULT_MODEL;
   }
 
-  async complete(messages: LlmMessage[], tools: ToolDefinition[] = []): Promise<LlmResponse> {
+  async complete(
+    messages: LlmMessage[],
+    tools: ToolDefinition[] = [],
+    _options: CompleteOptions = {},
+  ): Promise<LlmResponse> {
     const system = messages.find((message) => message.role === "system")?.content;
     const apiMessages = messages
       .filter((message) => message.role !== "system")
@@ -36,7 +48,7 @@ export class AnthropicClient implements LlmClient {
       body.tools = tools.map(toAnthropicTool);
     }
 
-    const response = await fetch(ANTHROPIC_API_URL, {
+    const response = await fetchWithRetry(ANTHROPIC_API_URL, {
       method: "POST",
       headers: {
         "x-api-key": this.apiKey,

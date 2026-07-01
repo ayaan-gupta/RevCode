@@ -132,6 +132,11 @@ def run_harbor(args: argparse.Namespace) -> Path:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(REPO_ROOT)
 
+    # Build the single-file bundle the agent ships into the container so the
+    # trial skips npm install/build (the old cold-start bottleneck).
+    if args.agent == "revcode":
+        subprocess.run(["npm", "run", "bundle"], cwd=REPO_ROOT, env=env, check=True)
+
     harbor_bin = REPO_ROOT / "eval" / ".venv" / "bin" / "harbor"
     harbor_cmd = str(harbor_bin) if harbor_bin.exists() else "harbor"
 

@@ -60,8 +60,15 @@ export async function readBoxedInput(options: BoxedInputOptions): Promise<string
   render();
 
   return new Promise((resolve) => {
+    const onResize = (): void => {
+      if (!finished) {
+        render();
+      }
+    };
+
     const cleanup = (): void => {
       input.removeListener("keypress", onKeypress);
+      output.removeListener("resize", onResize);
       input.setRawMode?.(wasRaw ?? false);
     };
 
@@ -92,6 +99,27 @@ export async function readBoxedInput(options: BoxedInputOptions): Promise<string
       if (key.name === "escape") {
         buffer = "";
         cursor = 0;
+        render();
+        return;
+      }
+
+      // Clear the whole line (Ctrl+U).
+      if (key.ctrl && key.name === "u") {
+        buffer = "";
+        cursor = 0;
+        render();
+        return;
+      }
+
+      // Jump to start / end of line (Home/End and Ctrl+A/Ctrl+E).
+      if (key.name === "home" || (key.ctrl && key.name === "a")) {
+        cursor = 0;
+        render();
+        return;
+      }
+
+      if (key.name === "end" || (key.ctrl && key.name === "e")) {
+        cursor = buffer.length;
         render();
         return;
       }
@@ -132,6 +160,7 @@ export async function readBoxedInput(options: BoxedInputOptions): Promise<string
     };
 
     input.on("keypress", onKeypress);
+    output.on("resize", onResize);
   });
 }
 

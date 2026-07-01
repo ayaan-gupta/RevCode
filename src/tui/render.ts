@@ -1,6 +1,8 @@
 import type { CliArgs } from "../cli.js";
 import { dim, rgb, supportsColor } from "./ansi.js";
 import { getBannerWidth, renderBanner } from "./banner.js";
+import { extractDiff, formatToolCall, renderDiff } from "./format.js";
+import { MarkdownStream, renderMarkdown } from "./markdown.js";
 import type { SlashCommand } from "./slash-commands.js";
 import { ThinkingSpinner, type SpinnerHandle } from "./spinner.js";
 import {
@@ -31,6 +33,8 @@ export class TerminalRenderer {
   private hasInputFrame = false;
   private hasStatusBar = false;
   private lastInputCursorColumn = 1;
+  private mdStream: MarkdownStream | undefined;
+  private contextPercent = 0;
 
   constructor(args: CliArgs, isTty: boolean) {
     this.args = args;
@@ -47,6 +51,11 @@ export class TerminalRenderer {
 
   updateModel(model: string): void {
     this.args = { ...this.args, model };
+  }
+
+  /** Update the context-usage gauge shown in the status bar (0–100). */
+  setContextPercent(percent: number): void {
+    this.contextPercent = Math.max(0, Math.min(100, Math.round(percent)));
   }
 
   welcome(): void {
@@ -122,9 +131,11 @@ export class TerminalRenderer {
     const cwd = shortenPath(this.args.cwd);
     const provider = this.args.provider ?? "auto";
     const modelLabel = `${this.args.model} (${provider})`;
+    const ctx = this.contextPercent > 0 ? `${this.contextPercent}% ctx` : "";
 
     if (!this.rich) {
-      process.stdout.write(`${cwd}  interactive  ${modelLabel}\n`);
+      const ctxPlain = ctx ? `  ${ctx}` : "";
+      process.stdout.write(`${cwd}  interactive  ${modelLabel}${ctxPlain}\n`);
       this.hasStatusBar = true;
       return;
     }
@@ -132,7 +143,7 @@ export class TerminalRenderer {
     const columns = process.stdout.columns ?? 80;
     const left = rgb(COLOR_CYAN, cwd);
     const center = rgb(COLOR_PINK, "interactive");
-    const right = rgb(COLOR_PURPLE, modelLabel);
+    const right = rgb(COLOR_PURPLE, ctx ? `${modelLabel}  ·  ${ctx}` : modelLabel);
     const gap = "  ";
     const content = `${left}${gap}${center}${gap}${right}`;
     const padding = Math.max(0, columns - stripVisibleLength(content));
@@ -152,12 +163,76 @@ export class TerminalRenderer {
   }
 
   toolCall(name: string, args: Record<string, unknown>): void {
-    const line = `  ${name}(${JSON.stringify(args)})`;
+    console.log(formatToolCall(name, args, this.rich));
+  }
+
+  toolResult(name: string, result: unknown): void {
+    const diff = name === "write_file" || name === "edit_file" ? extractDiff(result) : undefined;
+    if (diff) {
+      console.log(renderDiff(diff, this.rich));
+      return;
+    }
+    const summary = summarizeToolResult(name, result);
+    if (!summary) {
+      return;
+    }
+    const line = `    ↳ ${summary}`;
     console.log(this.rich ? dim(line) : line);
   }
 
+  // --- streaming assistant output -----------------------------------------
+
+  beginStream(): void {
+    this.mdStream = new MarkdownStream(this.rich);
+    process.stdout.write("\n");
+  }
+
+  streamAssistant(delta: string): void {
+    if (!this.mdStream) {
+      this.beginStream();
+    }
+    process.stdout.write(this.mdStream!.push(delta));
+  }
+
+  endStream(): void {
+    if (!this.mdStream) {
+      return;
+    }
+    const tail = this.mdStream.flush();
+    process.stdout.write(`${tail}\n\n`);
+    this.mdStream = undefined;
+  }
+
+  isStreaming(): boolean {
+    return this.mdStream !== undefined;
+  }
+
+  plan(steps: Array<{ step: string; status: string }>): void {
+    if (steps.length === 0) {
+      return;
+    }
+    console.log("");
+    console.log(this.rich ? rgb(COLOR_PURPLE, "  Plan") : "  Plan");
+    for (const { step, status } of steps) {
+      const marker = status === "completed" ? "✔" : status === "in_progress" ? "▸" : "○";
+      const text = `  ${marker} ${step}`;
+      if (!this.rich) {
+        console.log(text);
+        continue;
+      }
+      if (status === "completed") {
+        console.log(dim(text));
+      } else if (status === "in_progress") {
+        console.log(rgb(COLOR_CYAN, text));
+      } else {
+        console.log(text);
+      }
+    }
+    console.log("");
+  }
+
   assistant(text: string): void {
-    console.log(`\n${text}\n`);
+    console.log(`\n${renderMarkdown(text, this.rich)}\n`);
   }
 
   info(text: string): void {
@@ -252,6 +327,35 @@ export class TerminalRenderer {
     process.stdout.write(`\x1b[${linesUp}A\x1b[${this.lastInputCursorColumn}G`);
     showCursor();
   }
+}
+
+function summarizeToolResult(name: string, result: unknown): string {
+  if (!result || typeof result !== "object") {
+    return "";
+  }
+  const record = result as Record<string, unknown>;
+
+  if (record.error) {
+    return `error: ${truncateInline(String(record.error), 200)}`;
+  }
+
+  if (name === "shell") {
+    if (record.background && typeof record.background === "object") {
+      const bg = record.background as { pid?: number | null };
+      return `started in background (pid ${bg.pid ?? "?"})`;
+    }
+    const parts: string[] = [`exit ${record.exitCode ?? "?"}`];
+    if (record.timedOut) parts.push("timed out");
+    if (record.sessionReset) parts.push("session reset");
+    return parts.join(", ");
+  }
+
+  return "";
+}
+
+function truncateInline(text: string, max: number): string {
+  const single = text.replace(/\s+/g, " ").trim();
+  return single.length > max ? `${single.slice(0, max)}…` : single;
 }
 
 function shortenPath(cwd: string): string {

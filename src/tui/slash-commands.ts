@@ -7,6 +7,8 @@ export const SLASH_COMMANDS: readonly SlashCommand[] = [
   { command: "/help", description: "Show available commands" },
   { command: "/memory", description: "Show message history sent to the LLM" },
   { command: "/tools", description: "Show tool JSON schemas" },
+  { command: "/tokens", description: "Show estimated context usage" },
+  { command: "/compact", description: "Summarize old tool output to reclaim context" },
   { command: "/clear", description: "Reset conversation to system prompt only" },
   { command: "/model", description: "Show or switch the active model" },
   { command: "/exit", description: "Quit" },

@@ -24,9 +24,9 @@ export interface CliArgs {
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = {
     cwd: process.cwd(),
-    model: "glm-4.7",
+    model: "glm-5.2",
     headless: false,
-    maxIterations: 25,
+    maxIterations: 50,
   };
 
   for (let index = 0; index < argv.length; index += 1) {

@@ -8,13 +8,27 @@ import { globFiles, type GlobToolInput } from "./glob.js";
 import { grepFiles, type GrepToolInput } from "./grep.js";
 import { listDirectory, type ListToolInput } from "./list.js";
 import { execShell, type ShellToolInput } from "./shell.js";
+import { ShellSession } from "./shell-session.js";
+import { PlanStore, updatePlan, type PlanStep, type UpdatePlanInput } from "./plan.js";
 import { readFile, type ReadToolInput } from "./read.js";
 import { writeFile, type WriteToolInput } from "./write.js";
 
+/** Tools that only read state and may run concurrently within a turn. */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
+  "read_file",
+  "list_directory",
+  "grep",
+  "glob",
+]);
+
 export class ToolRegistry {
   private readonly tools = new Map<string, RegisteredTool>();
+  private readonly shellSession: ShellSession;
+  private readonly planStore = new PlanStore();
 
   constructor(options: ToolRegistryOptions = {}) {
+    const cwd = options.cwd ?? process.cwd();
+    this.shellSession = new ShellSession({ cwd });
     this.register({
       definition: readToolDefinition,
       handler: (input) => readFile(input as ReadToolInput, { cwd: options.cwd }),
@@ -29,7 +43,7 @@ export class ToolRegistry {
     });
     this.register({
       definition: shellToolDefinition,
-      handler: (input) => execShell(input as ShellToolInput, { cwd: options.cwd }),
+      handler: (input) => execShell(input as ShellToolInput, { session: this.shellSession }),
     });
     this.register({
       definition: listDirectoryToolDefinition,
@@ -47,6 +61,15 @@ export class ToolRegistry {
       definition: deleteFileToolDefinition,
       handler: (input) => deleteFile(input as DeleteToolInput, { cwd: options.cwd }),
     });
+    this.register({
+      definition: updatePlanToolDefinition,
+      handler: async (input) => updatePlan(input as UpdatePlanInput, this.planStore),
+    });
+  }
+
+  /** Current plan steps (for rendering). */
+  getPlan(): PlanStep[] {
+    return this.planStore.get();
   }
 
   register(tool: RegisteredTool): void {
@@ -62,6 +85,16 @@ export class ToolRegistry {
   /** Return tool definitions for the LLM's function-calling interface. */
   definitions(): ToolDefinition[] {
     return Array.from(this.tools.values(), (tool) => tool.definition);
+  }
+
+  /** True for tools that only read state and may run concurrently. */
+  isReadOnly(name: string): boolean {
+    return READ_ONLY_TOOLS.has(name);
+  }
+
+  /** Tear down the persistent shell session and its process group. */
+  dispose(): void {
+    this.shellSession.dispose();
   }
 }
 
@@ -172,24 +205,24 @@ const editToolDefinition: ToolDefinition = {
 const shellToolDefinition: ToolDefinition = {
   name: "shell",
   description:
-    "Execute a shell command inside the working directory. Captures stdout and stderr, enforces a timeout, and truncates large output. Do not use ls/find for directory listing — use list_directory. For content search prefer grep; for file discovery prefer glob.",
+    "Execute a command in a PERSISTENT bash session: working directory (cd), exported environment, activated virtualenvs, and background jobs all persist across calls. stdout and stderr are merged into one stream; large output is truncated keeping the head and tail. To start a long-running process (e.g. a server) set background:true so it keeps running and the call returns immediately — do NOT run a server in the foreground or the call will block until it times out. Do not use ls/find for directory listing (use list_directory); for content search prefer grep; for file discovery prefer glob.",
   parameters: {
     type: "object",
     properties: {
       command: {
         type: "string",
-        description: "Shell command to execute.",
+        description: "Shell command to execute in the persistent session.",
       },
       timeout: {
         type: "integer",
         minimum: 1,
-        maximum: 120000,
-        description: "Optional timeout in milliseconds. Defaults to 30000 and caps at 120000.",
+        maximum: 600000,
+        description: "Optional timeout in milliseconds. Defaults to 120000 and caps at 600000.",
       },
-      cwd: {
-        type: "string",
+      background: {
+        type: "boolean",
         description:
-          "Optional command working directory, relative to the agent working directory.",
+          "Run the command detached (redirected to a log file) and return immediately. Use for servers, watchers, and other long-running processes. Read its output later with shell(\"cat <logFile>\").",
       },
     },
     required: ["command"],
@@ -283,6 +316,37 @@ const deleteFileToolDefinition: ToolDefinition = {
       },
     },
     required: ["path"],
+    additionalProperties: false,
+  },
+};
+
+const updatePlanToolDefinition: ToolDefinition = {
+  name: "update_plan",
+  description:
+    "Record or update an ordered checklist for a multi-step task. Call this at the start of non-trivial work and whenever a step's status changes. Keep exactly one step 'in_progress'. Pass the full list each time (it replaces the previous plan). Skip for trivial single-step tasks.",
+  parameters: {
+    type: "object",
+    properties: {
+      steps: {
+        type: "array",
+        minItems: 1,
+        description: "The complete ordered list of steps with their current status.",
+        items: {
+          type: "object",
+          properties: {
+            step: { type: "string", description: "Short description of the step." },
+            status: {
+              type: "string",
+              enum: ["pending", "in_progress", "completed"],
+              description: "Current status of the step.",
+            },
+          },
+          required: ["step", "status"],
+          additionalProperties: false,
+        },
+      },
+    },
+    required: ["steps"],
     additionalProperties: false,
   },
 };

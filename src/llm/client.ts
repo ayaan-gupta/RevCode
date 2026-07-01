@@ -5,10 +5,15 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { AnthropicClient } from "./anthropic.js";
+import { fetchWithRetry } from "./retry.js";
 import { extractToolCalls } from "./tool-call-parser.js";
 
 const ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
-const ZAI_DEFAULT_MODEL = "glm-4.7";
+const ZAI_DEFAULT_MODEL = "glm-5.2";
+// glm-5.2 is a reasoning model: completion tokens are split between
+// `reasoning_content` (chain-of-thought) and `content` (the answer). A low cap
+// starves the answer (finish_reason "length"), so default to a generous budget.
+const ZAI_DEFAULT_MAX_TOKENS = 16_384;
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -21,6 +26,8 @@ export interface LlmMessage {
 export interface LlmResponse {
   content: string;
   toolCalls: LlmToolCall[];
+  /** Reasoning/chain-of-thought text, when the model exposes it (e.g. glm-5.2). */
+  reasoning?: string;
 }
 
 export interface LlmToolCall {
@@ -29,9 +36,28 @@ export interface LlmToolCall {
   arguments: Record<string, unknown>;
 }
 
+/** Incremental token from a streaming completion. */
+export interface LlmStreamDelta {
+  text?: string;
+  reasoning?: string;
+}
+
+export interface CompleteOptions {
+  /**
+   * When provided, the client streams the response and invokes this for each
+   * token. Note: once the first delta has fired, a mid-stream failure is NOT
+   * transparently retried (no duplicate tokens) — it surfaces to the caller.
+   */
+  onDelta?: (delta: LlmStreamDelta) => void;
+}
+
 export interface LlmClient {
   /** Send messages and return the model's response. */
-  complete(messages: LlmMessage[], tools?: ToolDefinition[]): Promise<LlmResponse>;
+  complete(
+    messages: LlmMessage[],
+    tools?: ToolDefinition[],
+    options?: CompleteOptions,
+  ): Promise<LlmResponse>;
 }
 
 export interface ToolDefinition {
@@ -108,22 +134,19 @@ class ZaiClient implements LlmClient {
     this.model = model;
   }
 
-  async complete(messages: LlmMessage[], tools: ToolDefinition[] = []): Promise<LlmResponse> {
-    const response = await fetch(`${this.baseUrl}/chat/completions`, {
+  async complete(
+    messages: LlmMessage[],
+    tools: ToolDefinition[] = [],
+    options: CompleteOptions = {},
+  ): Promise<LlmResponse> {
+    if (options.onDelta) {
+      return this.completeStreaming(messages, tools, options.onDelta);
+    }
+
+    const response = await fetchWithRetry(`${this.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${this.apiKey}`,
-        "Content-Type": "application/json",
-        "Accept-Language": "en-US,en",
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: messages.map(toOpenAiMessage),
-        tools: tools.map(toOpenAiTool),
-        tool_choice: "auto",
-        temperature: 0.2,
-      }),
-      signal: AbortSignal.timeout(180_000),
+      headers: this.headers(),
+      body: this.requestBody(messages, tools, false),
     });
 
     const responseText = await response.text();
@@ -153,12 +176,143 @@ class ZaiClient implements LlmClient {
     return {
       content: extracted.content,
       toolCalls: extracted.toolCalls,
+      reasoning: message.reasoning_content || undefined,
     };
+  }
+
+  /**
+   * Streaming completion. fetchWithRetry covers pre-stream (connection/status)
+   * retries; once the body starts and the first delta fires, a mid-stream
+   * failure surfaces to the caller rather than being silently re-streamed.
+   */
+  private async completeStreaming(
+    messages: LlmMessage[],
+    tools: ToolDefinition[],
+    onDelta: (delta: LlmStreamDelta) => void,
+  ): Promise<LlmResponse> {
+    const response = await fetchWithRetry(`${this.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { ...this.headers(), Accept: "text/event-stream" },
+      body: this.requestBody(messages, tools, true),
+    });
+
+    if (!response.ok || !response.body) {
+      const errorText = response.body ? await response.text() : "";
+      throw new Error(`Z.ai API request failed (${response.status}): ${errorText}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let content = "";
+    let reasoning = "";
+    let deltaEmitted = false;
+    const toolAcc = new Map<number, { id: string; name: string; args: string }>();
+
+    try {
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) {
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed.startsWith("data:")) {
+            continue;
+          }
+          const data = trimmed.slice("data:".length).trim();
+          if (data === "[DONE]") {
+            continue;
+          }
+
+          let chunk: ZaiStreamChunk;
+          try {
+            chunk = JSON.parse(data) as ZaiStreamChunk;
+          } catch {
+            continue; // skip keep-alives / partial frames
+          }
+
+          const delta = chunk.choices?.[0]?.delta;
+          if (!delta) {
+            continue;
+          }
+          if (delta.reasoning_content) {
+            reasoning += delta.reasoning_content;
+            onDelta({ reasoning: delta.reasoning_content });
+          }
+          if (delta.content) {
+            content += delta.content;
+            deltaEmitted = true;
+            onDelta({ text: delta.content });
+          }
+          for (const tc of delta.tool_calls ?? []) {
+            const index = tc.index ?? 0;
+            const entry = toolAcc.get(index) ?? { id: "", name: "", args: "" };
+            if (tc.id) entry.id = tc.id;
+            if (tc.function?.name) entry.name = tc.function.name;
+            if (tc.function?.arguments) entry.args += tc.function.arguments;
+            toolAcc.set(index, entry);
+          }
+        }
+      }
+    } catch (error) {
+      if (deltaEmitted) {
+        throw new Error(
+          `Z.ai stream interrupted after partial output: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      throw error;
+    }
+
+    const apiToolCalls = [...toolAcc.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([, entry]) =>
+        fromOpenAiToolCall({
+          id: entry.id || `call-${Math.random().toString(36).slice(2)}`,
+          type: "function",
+          function: { name: entry.name, arguments: entry.args },
+        }),
+      );
+
+    const extracted = extractToolCalls({ toolCalls: apiToolCalls, content, tools });
+    return {
+      content: extracted.content,
+      toolCalls: extracted.toolCalls,
+      reasoning: reasoning || undefined,
+    };
+  }
+
+  private headers(): Record<string, string> {
+    return {
+      Authorization: `Bearer ${this.apiKey}`,
+      "Content-Type": "application/json",
+      "Accept-Language": "en-US,en",
+    };
+  }
+
+  private requestBody(messages: LlmMessage[], tools: ToolDefinition[], stream: boolean): string {
+    return JSON.stringify({
+      model: this.model,
+      messages: messages.map(toOpenAiMessage),
+      tools: tools.map(toOpenAiTool),
+      tool_choice: "auto",
+      temperature: 0.2,
+      max_tokens: ZAI_DEFAULT_MAX_TOKENS,
+      stream,
+    });
   }
 }
 
 class LocalTestClient implements LlmClient {
-  async complete(messages: LlmMessage[], tools: ToolDefinition[] = []): Promise<LlmResponse> {
+  async complete(
+    messages: LlmMessage[],
+    tools: ToolDefinition[] = [],
+    _options: CompleteOptions = {},
+  ): Promise<LlmResponse> {
     const lastMessage = messages.at(-1);
     if (!lastMessage) {
       return {
@@ -233,7 +387,22 @@ interface ZaiChatCompletionResponse {
   choices?: Array<{
     message?: {
       content?: string | null;
+      reasoning_content?: string | null;
       tool_calls?: OpenAiToolCall[];
+    };
+  }>;
+}
+
+interface ZaiStreamChunk {
+  choices?: Array<{
+    delta?: {
+      content?: string | null;
+      reasoning_content?: string | null;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
     };
   }>;
 }

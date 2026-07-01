@@ -1,5 +1,12 @@
 # Agent Anti-Patterns & Fixes
 
+> **Note (2026-06-30 overhaul):** `shell` now runs in a **persistent session**
+> (`src/tools/shell-session.ts`) — `cd`/env/venv and background servers persist
+> across calls; start long-running processes with `background: true`. The agent
+> also has retry/backoff, streaming, a planning tool, position-aware parallel
+> read-only tools, and rule-based context compaction. Default model is
+> `glm-5.2`. See `eval/PERFORMANCE.md`.
+
 Stress-test fixture lives at `/tmp/agent_bench`:
 
 ```
