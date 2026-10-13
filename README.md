@@ -36,6 +36,8 @@ revcode --provider openai-compat --base-url http://localhost:8000/v1 --model my-
 revcode -c                                # continue the latest session here
 ```
 
+Behind an HTTP(S) proxy, set `HTTPS_PROXY` (and `NO_PROXY`) as usual — RevCode re-launches itself once with Node's `NODE_USE_ENV_PROXY=1` (Node 22.21+/24+) so model calls go through it. Set `REVCODE_NO_PROXY_REEXEC=1` to opt out.
+
 ## Parallel Universes
 
 ```bash

@@ -100,9 +100,14 @@ export async function fetchWithRetry(
     await sleep(delay, signal);
   }
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error(`Request failed after ${cfg.maxAttempts} attempts`);
+  if (lastError instanceof Error) {
+    const described = describeNetworkError(lastError);
+    if (described !== lastError.message) {
+      throw new Error(described, { cause: lastError });
+    }
+    throw lastError;
+  }
+  throw new Error(`Request failed after ${cfg.maxAttempts} attempts`);
 }
 
 /**
@@ -174,9 +179,29 @@ function backoffMs(attempt: number, cfg: RetryConfig): number {
 
 function errorReason(error: unknown): string {
   if (error instanceof Error) {
-    return error.name === "TimeoutError" ? "request timeout" : error.message;
+    return error.name === "TimeoutError" ? "request timeout" : describeNetworkError(error);
   }
   return String(error);
+}
+
+/**
+ * Node's `fetch` reports every transport failure as the unhelpful
+ * `TypeError: fetch failed`; the real reason (ENOTFOUND, ECONNREFUSED, a TLS
+ * error…) hides in `error.cause`. Surface it, with a hint for the common
+ * "proxy configured but not used" case.
+ */
+export function describeNetworkError(error: Error): string {
+  const cause = error.cause;
+  if (!(cause instanceof Error)) {
+    return error.message;
+  }
+  const code = (cause as NodeJS.ErrnoException).code;
+  const detail = [code, cause.message].filter((part) => part && part !== code).join(": ");
+  const base = `${error.message} (${code ?? cause.name}${detail ? `: ${detail}` : ""})`;
+  const proxied = process.env.HTTPS_PROXY || process.env.https_proxy;
+  return code === "ENOTFOUND" && proxied && !process.env.NODE_USE_ENV_PROXY
+    ? `${base} — HTTPS_PROXY is set but Node is not using it; run with NODE_USE_ENV_PROXY=1`
+    : base;
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {

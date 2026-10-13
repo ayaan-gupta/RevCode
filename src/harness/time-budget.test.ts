@@ -44,9 +44,9 @@ describe("completion gate", () => {
     expect(first).toContain("Write /app/out.txt containing 42");
     expect(check()).toBeUndefined(); // model confirmed without doing anything new
 
-    act(gate, "shell");
+    act(gate, "edit_file");
     expect(check()).toBeDefined(); // it fixed something, so challenge once more
-    act(gate, "shell");
+    act(gate, "edit_file");
     expect(check()).toBeUndefined(); // capped at two challenges
   });
 

@@ -11,6 +11,7 @@ import { HELP_TEXT, parseCommandLine, resolveArgs, type CliArgs } from "./cli.js
 import { runUniversesCommand } from "./commands/universes.js";
 import { runProfileCommand, runSessionsCommand } from "./commands/misc.js";
 import { loadConfig } from "./config/config.js";
+import { reexecWithEnvProxy } from "./net/env-proxy.js";
 import { VERSION } from "./version.js";
 
 function withConfig(args: CliArgs): CliArgs {
@@ -53,7 +54,14 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((err) => {
-  console.error("RevCode failed:", err instanceof Error ? err.message : err);
-  process.exit(1);
-});
+reexecWithEnvProxy()
+  .then((exitCode) => {
+    if (exitCode !== undefined) {
+      process.exit(exitCode);
+    }
+    return main();
+  })
+  .catch((err) => {
+    console.error("RevCode failed:", err instanceof Error ? err.message : err);
+    process.exit(1);
+  });

@@ -228,3 +228,14 @@ describe("fetchWithRetry timing", () => {
   });
 });
 
+
+describe("describeNetworkError", () => {
+  it("surfaces the cause hidden behind Node's generic 'fetch failed'", async () => {
+    const { describeNetworkError } = await import("./retry.js");
+    const cause = Object.assign(new Error("getaddrinfo ENOTFOUND api.example.com"), { code: "ENOTFOUND" });
+    const error = new TypeError("fetch failed", { cause });
+    expect(describeNetworkError(error)).toContain("ENOTFOUND");
+    expect(describeNetworkError(error)).toContain("api.example.com");
+    expect(describeNetworkError(new Error("plain"))).toBe("plain");
+  });
+});
