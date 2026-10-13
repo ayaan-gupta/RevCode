@@ -7,7 +7,7 @@ import { DEFAULT_PROFILE, withProfile } from "../harness/profile.js";
 import { createVerifyGate } from "../harness/verify-gate.js";
 import { ToolRegistry } from "../tools/index.js";
 import { TimeBudget } from "../harness/time-budget.js";
-import type { LlmMessage } from "../llm/client.js";
+import type { CompleteOptions, LlmClient, LlmMessage, LlmResponse } from "../llm/client.js";
 import { AgentEngine, isTransientStreamError, looksLikeUnfinishedNarration, MAX_TOOL_RESULT_CHARS, type EngineOptions } from "./engine.js";
 
 const registries: ToolRegistry[] = [];
@@ -366,19 +366,19 @@ describe("provider streaming and transient failures", () => {
         throw new Error("Stream stalled: no data received for 300000ms");
       },
       say("recovered"),
-    ]);
+    ], { transientRetryDelayMs: 1 });
     const result = await engine.runTurn("hello");
     expect(result.stopReason).toBe("complete");
     expect(result.finalContent).toBe("recovered");
     expect(llm.calls).toHaveLength(2);
-  }, 15_000);
+  });
 
   it("gives up after repeated transient failures and does not retry real API errors", async () => {
     const transient = makeEngine([
       () => {
         throw new Error("stream interrupted after partial output: terminated");
       },
-    ]);
+    ], { transientRetryDelayMs: 1 });
     const result = await transient.engine.runTurn("hello");
     expect(result.stopReason).toBe("error");
     expect(transient.llm.calls).toHaveLength(4); // first try + 3 retries
@@ -390,7 +390,7 @@ describe("provider streaming and transient failures", () => {
     ]);
     expect((await fatal.engine.runTurn("hello")).stopReason).toBe("error");
     expect(fatal.llm.calls).toHaveLength(1);
-  }, 30_000);
+  });
 
   it("recognizes transient failure messages", () => {
     for (const message of ["Stream stalled: no data received for 1000ms", "terminated", "fetch failed (ECONNRESET)", "socket hang up"]) {
@@ -399,5 +399,39 @@ describe("provider streaming and transient failures", () => {
     for (const message of ["Z.ai API request failed (400): bad request", "context length exceeded"]) {
       expect(isTransientStreamError(message)).toBe(false);
     }
+  });
+});
+
+describe("hard time-budget deadline", () => {
+  it("aborts a model call that is still in flight when the budget runs out", async () => {
+    const hangs: LlmClient = {
+      complete: (_messages, _tools, options?: CompleteOptions) =>
+        new Promise<LlmResponse>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" })));
+        }),
+    };
+    const { engine } = makeEngine([], { llm: hangs, timeBudget: new TimeBudget(400) });
+    const started = Date.now();
+    const result = await engine.runTurn("do something slow");
+    expect(result.stopReason).toBe("time_budget");
+    expect(Date.now() - started).toBeLessThan(3_000);
+  });
+
+  it("interrupts a long-running command at the deadline", async () => {
+    const { engine } = makeEngine(
+      [toolCall("shell", { command: "sleep 30", timeout: 60 }), say("never reached")],
+      { timeBudget: new TimeBudget(2_000) },
+    );
+    const started = Date.now();
+    const result = await engine.runTurn("run a long command");
+    expect(result.stopReason).toBe("time_budget");
+    expect(Date.now() - started).toBeLessThan(10_000);
+  }, 20_000);
+
+  it("still reports a user abort as aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const { engine } = makeEngine([say("hi")], { timeBudget: new TimeBudget(60_000) });
+    expect((await engine.runTurn("hello", controller.signal)).stopReason).toBe("aborted");
   });
 });

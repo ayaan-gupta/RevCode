@@ -84,6 +84,23 @@ class RevCodeAgent(BaseInstalledAgent):
         return "0.1.0"
 
     async def install(self, environment: BaseEnvironment) -> None:
+        # End-of-life Debian releases (buster, bullseye, ...) lose their packages from the main
+        # mirrors while the old indexes still list them, which breaks every apt install with 404s.
+        # Their archives live on archive.debian.org; no-op on supported releases and non-Debian images.
+        await self.exec_as_root(
+            environment,
+            command=(
+                '. /etc/os-release 2>/dev/null; '
+                'if [ "$ID" = debian ] && { [ "$VERSION_CODENAME" = bullseye ] || [ "$VERSION_CODENAME" = buster ]; }; then '
+                'rm -f /etc/apt/sources.list.d/*.list; '
+                "printf 'deb http://archive.debian.org/debian %s main\\ndeb http://archive.debian.org/debian-security %s-security main\\n' "
+                '"$VERSION_CODENAME" "$VERSION_CODENAME" > /etc/apt/sources.list; '
+                "echo 'Acquire::Check-Valid-Until \"false\";' > /etc/apt/apt.conf.d/99archive; "
+                'fi; true'
+            ),
+        )
+        # (The egress step below rewrites apt mirrors to https, so it must run after this one.)
+
         # Optional: containers that reach the network only through a TLS-intercepting egress
         # proxy (REVCODE_EVAL_CA_BUNDLE = host path of that proxy's CA). Trust the CA for apt
         # (verification stays ON) and switch apt mirrors to https, since such proxies tunnel
@@ -106,13 +123,21 @@ class RevCodeAgent(BaseInstalledAgent):
         # Node + ripgrep + tmux (the interactive `terminal` tool registers only when tmux exists) — no npm install/build inside the container.
         # Node 22: its fetch can honor HTTPS_PROXY (NODE_USE_ENV_PROXY), which RevCode enables itself.
         update_ca = "&& update-ca-certificates " if self._egress_ca else ""
+        # Package mirrors are occasionally inconsistent for a moment (index newer than pool -> 404),
+        # so the whole apt step is retried rather than failing the trial before the agent starts.
+        apt_install = (
+            "ok=0; for i in 1 2 3 4; do "
+            "if apt-get update && apt-get install -y --fix-missing -o Acquire::Retries=3 "
+            "curl ca-certificates gnupg ripgrep tmux; then ok=1; break; fi; sleep $((i * 5)); done; "
+            '[ "$ok" = 1 ]'
+        )
         await self.exec_as_root(
             environment,
             command=(
-                "apt-get update && apt-get install -y curl ca-certificates gnupg ripgrep tmux "
+                f"{apt_install} "
                 f"{update_ca}"
                 f"&& curl -fsSL https://deb.nodesource.com/setup_{self.NODE_MAJOR}.x | bash - "
-                "&& apt-get install -y nodejs "
+                "&& apt-get install -y -o Acquire::Retries=3 nodejs "
                 "&& mkdir -p /opt/revcode"
             ),
         )

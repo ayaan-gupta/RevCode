@@ -87,6 +87,8 @@ export interface EngineOptions {
   finalGates?: FinalGate[];
   /** Wall-clock budget: injects time nudges and ends the run cleanly near the limit. */
   timeBudget?: TimeBudget;
+  /** Base delay before retrying a step after a transient stream failure (default 2000ms, scaled by attempt). */
+  transientRetryDelayMs?: number;
   /** Resume from a prior conversation (must start with the system message). */
   initialMessages?: LlmMessage[];
 }
@@ -147,6 +149,7 @@ export class AgentEngine {
   private readonly middleware: ToolMiddleware[];
   private readonly finalGates: FinalGate[];
   private readonly timeBudget?: TimeBudget;
+  private readonly transientRetryDelayMs: number;
   private recentSignatures: string[] = [];
   /** Conversation length right after the last LLM summary (avoids summarizing in a loop). */
   private summarizedAt = -100;
@@ -159,6 +162,7 @@ export class AgentEngine {
     this.cwd = options.cwd;
     this.maxIterations = Math.max(1, options.maxIterations);
     this.stream = options.stream ?? false;
+    this.transientRetryDelayMs = options.transientRetryDelayMs ?? 2_000;
     this.observer = options.observer ?? {};
     this.middleware = options.middleware ?? [];
     this.finalGates = options.finalGates ?? [];
@@ -224,8 +228,22 @@ export class AgentEngine {
   }
 
   /** Run one user turn to completion (or until aborted / out of iterations). */
-  async runTurn(userInput: string, signal?: AbortSignal): Promise<TurnResult> {
+  async runTurn(userInput: string, userSignal?: AbortSignal): Promise<TurnResult> {
     const started = Date.now();
+
+    // The budget is also a hard deadline: an in-flight model call or command must not be able
+    // to run past it (a run killed by the harness loses its trajectory and cleanup).
+    const deadline = this.timeBudget ? new AbortController() : undefined;
+    const deadlineTimer = deadline
+      ? setTimeout(() => {
+          deadline.abort();
+          this.tools.interruptShell();
+        }, this.timeBudget?.msUntilStop() ?? 0)
+      : undefined;
+    deadlineTimer?.unref();
+    const signal = deadline ? (userSignal ? AbortSignal.any([userSignal, deadline.signal]) : deadline.signal) : userSignal;
+    const abortReason = (): StopReason => (deadline?.signal.aborted && !userSignal?.aborted ? "time_budget" : "aborted");
+
     const turnUsage: LlmUsage = { inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 };
     let iterations = 0;
     let turnToolCalls = 0;
@@ -245,7 +263,7 @@ export class AgentEngine {
     try {
       for (; iterations < this.maxIterations; iterations += 1) {
         if (signal?.aborted) {
-          stopReason = "aborted";
+          stopReason = abortReason();
           break;
         }
 
@@ -286,7 +304,7 @@ export class AgentEngine {
         } catch (error) {
           this.observer.llmEnd?.({ content: "", streamed });
           if (signal?.aborted) {
-            stopReason = "aborted";
+            stopReason = abortReason();
             break;
           }
           const message = error instanceof Error ? error.message : String(error);
@@ -303,7 +321,7 @@ export class AgentEngine {
           if (isTransientStreamError(message) && transientRetries < MAX_TRANSIENT_RETRIES) {
             transientRetries += 1;
             this.observer.notice?.(`model call failed (${message.slice(0, 120)}); retrying (${transientRetries}/${MAX_TRANSIENT_RETRIES})`);
-            await sleepUnlessAborted(2_000 * transientRetries, signal);
+            await sleepUnlessAborted(this.transientRetryDelayMs * transientRetries, signal);
             iterations -= 1;
             continue;
           }
@@ -389,6 +407,7 @@ export class AgentEngine {
         turnToolErrors += executed.errors;
       }
     } finally {
+      clearTimeout(deadlineTimer);
       this.stats.iterations += iterations;
       this.stats.toolCalls += turnToolCalls;
       this.stats.toolErrors += turnToolErrors;

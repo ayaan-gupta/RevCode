@@ -55,6 +55,11 @@ export class TimeBudget {
     return this.now() - this.startedAt;
   }
 
+  /** Milliseconds until the engine must stop the run (never negative). */
+  msUntilStop(): number {
+    return Math.max(0, this.totalMs * this.stopAt - this.elapsedMs());
+  }
+
   check(): BudgetCheck {
     const fraction = this.elapsedMs() / this.totalMs;
     let nudge: string | undefined;
