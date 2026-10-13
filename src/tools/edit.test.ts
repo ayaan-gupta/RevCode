@@ -242,10 +242,45 @@ describe("editFile: not-found diagnostics", () => {
     expect(message).toMatch(/Nothing in the file is similar to oldText/);
   });
 
-  it("flags line-number prefixes copied from a read", async () => {
+  it("flags line-number prefixes when the stripped text is not found either", async () => {
     await put("m.py", source);
-    const message = await edit("m.py", "2|    total = 0\n3|    for item in items:", "x").catch((e: Error) => e.message);
+    const message = await edit("m.py", "2|    total = 9\n3|    for item in items:", "x").catch((e: Error) => e.message);
     expect(message).toMatch(/line-number prefix/);
+  });
+
+  it("explains an empty file", async () => {
+    await put("empty.py", "\n");
+    await expect(edit("empty.py", "x", "y")).rejects.toThrow(/the file is empty\. Use write_file/);
+  });
+});
+
+describe("editFile: copied line-number prefixes", () => {
+  const source = "def f():\n    total = 0\n\n    return total\n";
+
+  it("removes N| prefixes copied from read_file output", async () => {
+    await put("m.py", source);
+    const result = await edit("m.py", "2|    total = 0\n3|\n4|    return total", "2|    total = 1\n3|\n4|    return total");
+    expect(await get("m.py")).toBe("def f():\n    total = 1\n\n    return total\n");
+    expect(result).toContain("had line-number prefixes (`N|`) in oldText; they were removed");
+  });
+
+  it("removes prefixes from oldText only, leaving a clean newText alone", async () => {
+    await put("m.py", source);
+    await edit("m.py", "2|    total = 0", "    total = 5");
+    expect(await get("m.py")).toBe("def f():\n    total = 5\n\n    return total\n");
+  });
+
+  it("does not strip when the file really contains such lines", async () => {
+    await put("data.txt", "1|alpha\n2|beta\n");
+    const result = await edit("data.txt", "1|alpha", "1|ALPHA");
+    expect(await get("data.txt")).toBe("1|ALPHA\n2|beta\n");
+    expect(result).not.toContain("line-number prefixes");
+  });
+
+  it("removes LINE#ID: prefixes too", async () => {
+    await put("m.py", source);
+    await edit("m.py", "2#ZP:    total = 0", "    total = 2");
+    expect(await get("m.py")).toBe("def f():\n    total = 2\n\n    return total\n");
   });
 });
 
@@ -361,7 +396,7 @@ describe("editFile: forgiving matches", () => {
 
   it("reports which tier matched in the result", () => {
     const result = applyEdits("  a\n  b\n", [{ oldText: "a\nb", newText: "c" }], "x");
-    expect(result.applied).toEqual([{ index: 0, strategy: "line-trimmed", count: 1, reindented: true }]);
+    expect(result.applied).toEqual([{ index: 0, strategy: "line-trimmed", count: 1, reindented: true, strippedPrefixes: false }]);
   });
 });
 

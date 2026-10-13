@@ -95,3 +95,63 @@ describe("extractToolCalls", () => {
     expect(result.usedFallback).toBe(true);
   });
 });
+
+describe("additional tool-call dialects", () => {
+  const tools = [
+    { name: "shell", parameters: { properties: { command: { type: "string" }, timeout: { type: "integer" } } } },
+    { name: "write_file", parameters: { properties: { path: { type: "string" }, content: { type: "string" } } } },
+  ];
+
+  it("parses Hermes/Qwen JSON inside <tool_call>", () => {
+    const out = extractToolCalls({
+      toolCalls: [],
+      tools,
+      content: 'I will run it.\n<tool_call>\n{"name": "shell", "arguments": {"command": "ls -la", "timeout": 5}}\n</tool_call>',
+    });
+    expect(out.usedFallback).toBe(true);
+    expect(out.toolCalls).toHaveLength(1);
+    expect(out.toolCalls[0]).toMatchObject({ name: "shell", arguments: { command: "ls -la", timeout: 5 } });
+    expect(out.content).toBe("I will run it.");
+  });
+
+  it("accepts string-encoded arguments in Hermes JSON", () => {
+    const out = extractToolCalls({
+      toolCalls: [],
+      tools,
+      content: '<tool_call>{"name":"shell","arguments":"{\\"command\\":\\"pwd\\"}"}</tool_call>',
+    });
+    expect(out.toolCalls[0].arguments).toEqual({ command: "pwd" });
+  });
+
+  it("parses Qwen3-Coder <function=…><parameter=…> blocks, preserving multi-line values", () => {
+    const content = `<tool_call>
+<function=write_file>
+<parameter=path>
+app.py
+</parameter>
+<parameter=content>
+def f():
+    return 1
+</parameter>
+</function>
+</tool_call>`;
+    const out = extractToolCalls({ toolCalls: [], tools, content });
+    expect(out.toolCalls).toHaveLength(1);
+    expect(out.toolCalls[0].name).toBe("write_file");
+    expect(out.toolCalls[0].arguments).toEqual({ path: "app.py", content: "def f():\n    return 1" });
+    expect(out.content).toBe("");
+  });
+
+  it("strips <think> blocks from content, including an unclosed-opening variant", () => {
+    expect(extractToolCalls({ toolCalls: [], tools, content: "<think>hmm let me see</think>The answer is 4." }).content).toBe("The answer is 4.");
+    expect(extractToolCalls({ toolCalls: [], tools, content: "reasoning only…</think>Final." }).content).toBe("Final.");
+  });
+
+  it("still prefers structured tool calls and cleans markup from their content", () => {
+    const call = { id: "1", name: "shell", arguments: { command: "ls" } };
+    const out = extractToolCalls({ toolCalls: [call], tools, content: "<think>x</think>ok" });
+    expect(out.toolCalls).toEqual([call]);
+    expect(out.content).toBe("ok");
+    expect(out.usedFallback).toBe(false);
+  });
+});

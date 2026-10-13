@@ -1,8 +1,13 @@
 /**
  * Parse tool calls from LLM responses.
  *
- * GLM models may emit XML-style tool calls in message content when the API
- * does not populate structured tool_calls. This module normalizes both paths.
+ * Open models often emit tool calls as text in message content when the API does
+ * not populate structured tool_calls. Three dialects are understood:
+ *   - GLM:        <tool_call>name<arg_key>k</arg_key><arg_value>v</arg_value></tool_call>
+ *   - Hermes/Qwen:<tool_call>{"name": "...", "arguments": {...}}</tool_call>
+ *   - Qwen3-Coder:<tool_call><function=name><parameter=k>v</parameter></function></tool_call>
+ * plus single-line {"tool_call": {...}} JSON. This module normalizes all paths and
+ * strips <think> blocks from the visible content.
  */
 
 import type { LlmToolCall } from "./client.js";
@@ -31,7 +36,15 @@ function nextToolCallId(): string {
   return `parsed-tool-call-${Date.now()}-${toolCallIdCounter}`;
 }
 
-export function extractToolCalls(input: ExtractToolCallsInput): ExtractToolCallsResult {
+/** Remove reasoning blocks some servers inline into `content`. */
+export function stripThinkBlocks(content: string): string {
+  return content.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/^[\s\S]*<\/think>/i, "").trim();
+}
+
+export function extractToolCalls(rawInput: ExtractToolCallsInput): ExtractToolCallsResult {
+  const input = rawInput.content.includes("think>")
+    ? { ...rawInput, content: stripThinkBlocks(rawInput.content) }
+    : rawInput;
   if (input.toolCalls.length > 0) {
     return {
       toolCalls: input.toolCalls,
@@ -74,6 +87,29 @@ export function parseGlmXmlToolCalls(
 
   for (const match of content.matchAll(pattern)) {
     const body = match[1] ?? "";
+    const trimmedBody = body.trim();
+
+    // Hermes / Qwen: JSON object with name + arguments.
+    if (trimmedBody.startsWith("{")) {
+      const call = parseHermesJson(trimmedBody);
+      if (call) calls.push(call);
+      continue;
+    }
+
+    // Qwen3-Coder: <function=name><parameter=key>value</parameter>…</function>
+    const fn = body.match(/<function=([^>\s]+)>([\s\S]*?)(?:<\/function>|$)/);
+    if (fn) {
+      const name = fn[1].trim();
+      const args: Record<string, unknown> = {};
+      for (const param of fn[2].matchAll(/<parameter=([^>\s]+)>([\s\S]*?)<\/parameter>/g)) {
+        // Qwen wraps values in newlines; one leading and trailing newline is formatting, not content.
+        const raw = param[2].replace(/^\n/, "").replace(/\n$/, "");
+        args[param[1].trim()] = coerceArgumentValue(name, param[1].trim(), raw, tools);
+      }
+      calls.push({ id: nextToolCallId(), name, arguments: args });
+      continue;
+    }
+
     const nameMatch = body.match(/^\s*([^\n<]+)/);
     if (!nameMatch) {
       continue;
@@ -134,6 +170,30 @@ export function parseInlineJsonToolCalls(content: string): LlmToolCall[] {
   }
 
   return calls;
+}
+
+function parseHermesJson(text: string): LlmToolCall | undefined {
+  try {
+    const parsed = JSON.parse(text) as { name?: unknown; arguments?: unknown; parameters?: unknown };
+    if (typeof parsed.name !== "string" || parsed.name.length === 0) {
+      return undefined;
+    }
+    let args: unknown = parsed.arguments ?? parsed.parameters ?? {};
+    if (typeof args === "string") {
+      try {
+        args = JSON.parse(args);
+      } catch {
+        args = { input: args };
+      }
+    }
+    return {
+      id: nextToolCallId(),
+      name: parsed.name,
+      arguments: args && typeof args === "object" && !Array.isArray(args) ? (args as Record<string, unknown>) : {},
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function coerceArgumentValue(

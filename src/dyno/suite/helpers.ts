@@ -420,6 +420,61 @@ export async function httpGetWithRetry(url: string, totalMs = 6_000): Promise<Ht
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
+/**
+ * Cross-process mutex for a fixed TCP port, built on an atomic `mkdir`.
+ *
+ * Several processes may run the suite's validity tests at once (parallel CI
+ * shards, two developers on one box, a second `vitest run src/dyno`), and a
+ * grader that kills "whatever listens on the port" must never fire while another
+ * process is mid-attempt on that port. Locks left by a crashed process are
+ * detected by pid and by age.
+ */
+export async function withPortLock<T>(port: number, fn: () => Promise<T>): Promise<T> {
+  const lockDir = path.join(os.tmpdir(), `dyno-port-${port}.lock`);
+  const pidFile = path.join(lockDir, "pid");
+  const waitUntil = Date.now() + 180_000;
+
+  for (;;) {
+    try {
+      fs.mkdirSync(lockDir);
+      fs.writeFileSync(pidFile, String(process.pid));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      if (lockIsStale(lockDir, pidFile)) {
+        fs.rmSync(lockDir, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() > waitUntil) throw new Error(`timed out waiting for the lock on port ${port}`);
+      await sleep(200);
+    }
+  }
+
+  try {
+    return await fn();
+  } finally {
+    fs.rmSync(lockDir, { recursive: true, force: true });
+  }
+}
+
+function lockIsStale(lockDir: string, pidFile: string): boolean {
+  try {
+    const owner = Number(fs.readFileSync(pidFile, "utf8"));
+    if (Number.isInteger(owner) && owner > 0) {
+      process.kill(owner, 0);
+      return false;
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
+  }
+  // No readable owner yet (the creator may be between mkdir and writing its pid): only give up when old.
+  try {
+    return Date.now() - fs.statSync(lockDir).mtimeMs > 10 * 60_000;
+  } catch {
+    return true;
+  }
+}
+
 /** Start a long-lived process fully detached from the test runner (stdio ignored). */
 export function startDetached(command: string, args: readonly string[], cwd: string): void {
   const child = spawn(command, [...args], { cwd, detached: true, stdio: "ignore" });

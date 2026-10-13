@@ -243,6 +243,11 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       extraSections.push(`# MCP\nExternal tools from MCP servers (${connected.map((s) => s.name).join(", ")}) are available with names like mcp__<server>__<tool>.`);
     }
   }
+  if (tools.hasTerminal()) {
+    extraSections.push(
+      "# Interactive programs\nUse the `terminal` tool (not shell) for programs that need keyboard input: REPLs, editors like vim, debuggers, installers that ask questions, text games. Start the program, type with send, read the returned screen, and kill the session when done.",
+    );
+  }
   if (universe) {
     extraSections.push(
       `# Universe\nYou are working inside an isolated copy of the user's project (original: ${universe.meta.projectRoot}). Every change you make is recorded and stays in this copy; nothing reaches the real project until the user lands it. Use paths relative to the working directory and never reference the original project path.`,

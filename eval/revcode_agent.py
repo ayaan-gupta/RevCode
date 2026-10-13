@@ -83,11 +83,11 @@ class RevCodeAgent(BaseInstalledAgent):
         return "0.1.0"
 
     async def install(self, environment: BaseEnvironment) -> None:
-        # Node + ripgrep only — no npm install/build inside the container.
+        # Node + ripgrep + tmux (the interactive `terminal` tool registers only when tmux exists) — no npm install/build inside the container.
         await self.exec_as_root(
             environment,
             command=(
-                "apt-get update && apt-get install -y curl ca-certificates gnupg ripgrep "
+                "apt-get update && apt-get install -y curl ca-certificates gnupg ripgrep tmux "
                 "&& curl -fsSL https://deb.nodesource.com/setup_20.x | bash - "
                 "&& apt-get install -y nodejs "
                 "&& mkdir -p /opt/revcode"

@@ -153,6 +153,11 @@ export class PermissionManager {
       return { action: "ask", reason: "Runs a shell command.", summary: command };
     }
 
+    if (tool === "terminal") {
+      const detail = String(args.command ?? args.text ?? args.action ?? "");
+      return { action: "ask", reason: "Drives an interactive program.", summary: `terminal ${String(args.action ?? "")} ${truncate(detail, 100)}`.trim() };
+    }
+
     return { action: "ask", reason: `Uses the ${tool} tool.`, summary: `${tool} ${truncate(JSON.stringify(args), 120)}` };
   }
 

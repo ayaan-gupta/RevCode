@@ -15,6 +15,7 @@ import { DEFAULT_PROFILE, type HarnessProfile } from "../harness/profile.js";
 import { applySchemaStyle } from "../harness/schema-style.js";
 import { normalizeToolArgs } from "./normalize-args.js";
 import { EDIT_TOOL_NAMES, editToolsForMode } from "./edit-modes.js";
+import { isTmuxAvailable, TerminalManager, terminalToolDefinition, type TerminalInput } from "./terminal.js";
 
 /** Tools that only read state and may run concurrently within a turn. */
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
@@ -29,6 +30,7 @@ export class ToolRegistry {
   private readonly shellSession: ShellSession;
   private readonly planStore = new PlanStore();
   private readonly extraReadOnly = new Set<string>();
+  private terminal?: TerminalManager;
   private readonly cwd: string;
   private readonly unrestricted: boolean;
   private profile: HarnessProfile;
@@ -41,7 +43,12 @@ export class ToolRegistry {
     this.shellSession = new ShellSession({ cwd });
     this.register({
       definition: readToolDefinition,
-      handler: (input) => readFile(input as ReadToolInput, { cwd: this.cwd, unrestricted: this.unrestricted }),
+      handler: (input) =>
+        readFile(input as ReadToolInput, {
+          cwd: this.cwd,
+          unrestricted: this.unrestricted,
+          anchors: this.profile.editMode === "anchored",
+        }),
     });
     this.register({
       definition: writeToolDefinition,
@@ -72,6 +79,20 @@ export class ToolRegistry {
       handler: async (input) => updatePlan(input as UpdatePlanInput, this.planStore),
     });
     this.applyEditMode();
+
+    if (options.interactiveTerminal !== false && isTmuxAvailable()) {
+      this.terminal = new TerminalManager(cwd);
+      const terminal = this.terminal;
+      this.register({
+        definition: terminalToolDefinition,
+        handler: (input) => terminal.execute(input as TerminalInput),
+      });
+    }
+  }
+
+  /** True when the interactive `terminal` tool (tmux) is available in this session. */
+  hasTerminal(): boolean {
+    return this.tools.has(terminalToolDefinition.name);
   }
 
   /** Switch harness profile (edit tool set + schema presentation). */
@@ -147,9 +168,10 @@ export class ToolRegistry {
     this.shellSession.interrupt();
   }
 
-  /** Tear down the persistent shell session and its process group. */
+  /** Tear down the persistent shell session, its process group, and any terminal sessions. */
   dispose(): void {
     this.shellSession.dispose();
+    this.terminal?.dispose();
   }
 }
 
@@ -166,6 +188,8 @@ export interface ToolRegistryOptions {
   profile?: HarnessProfile;
   /** Let file tools touch paths outside cwd (headless / yolo / universes). */
   unrestrictedPaths?: boolean;
+  /** Register the tmux-backed `terminal` tool when tmux exists (default true). */
+  interactiveTerminal?: boolean;
 }
 
 export interface RegisteredTool {

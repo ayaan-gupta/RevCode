@@ -63,6 +63,8 @@ export interface AppliedEdit {
   count: number;
   /** The replacement's indentation was shifted to fit the file. */
   reindented: boolean;
+  /** oldText carried `N|` line-number prefixes from a read_file view, which were removed. */
+  strippedPrefixes: boolean;
 }
 
 export async function editFile(
@@ -106,7 +108,14 @@ export function applyEdits(
       throw new EditError(`${label}No changes to apply: oldText and newText are identical.`);
     }
 
-    const found = locate(content, edit.oldText);
+    // A model that copies rows of a read_file view includes the `N|` prefixes.
+    let request = edit;
+    const unprefixed = content.includes(edit.oldText) ? undefined : stripLinePrefixes(edit.oldText);
+    if (unprefixed !== undefined) {
+      request = { ...edit, oldText: unprefixed, newText: stripLinePrefixes(edit.newText) ?? edit.newText };
+    }
+
+    const found = locate(content, request.oldText);
     if (found === undefined) {
       throw new EditError(`${label}${describeNotFound(filePath, content, edit.oldText)}`);
     }
@@ -117,11 +126,17 @@ export function applyEdits(
     let reindented = false;
     // Replace from the end so earlier offsets stay valid.
     for (const span of [...found.spans].reverse()) {
-      const replacement = prepareReplacement(found.tier, content.slice(span.start, span.end), edit);
+      const replacement = prepareReplacement(found.tier, content.slice(span.start, span.end), request);
       reindented ||= replacement.reindented;
       content = content.slice(0, span.start) + replacement.text + content.slice(span.end);
     }
-    applied.push({ index, strategy: found.tier.name, count: found.spans.length, reindented });
+    applied.push({
+      index,
+      strategy: found.tier.name,
+      count: found.spans.length,
+      reindented,
+      strippedPrefixes: unprefixed !== undefined,
+    });
   });
 
   if (content === original) {
@@ -201,14 +216,27 @@ function describeResult(
   ];
 
   for (const edit of applied) {
-    if (edit.strategy === "exact") continue;
     const which = applied.length > 1 ? `Edit ${edit.index + 1}` : "The edit";
+    if (edit.strippedPrefixes) {
+      lines.push(`Note: ${which} had line-number prefixes (\`N|\`) in oldText; they were removed. Never include them.`);
+    }
+    if (edit.strategy === "exact") continue;
     const tier = TIERS.find((candidate) => candidate.name === edit.strategy);
     lines.push(
       `Note: ${which} did not match oldText exactly; it matched ${tier?.explanation ?? edit.strategy}${edit.reindented ? " and the replacement's indentation was adjusted to fit" : ""}. Check the diff.`,
     );
   }
   return [...lines, generateDiff(before, after, displayName)].join("\n");
+}
+
+const LINE_PREFIX = /^\s*\d+(?:\||#[A-Z]{2}:)/;
+
+/** Remove `N|` / `N#ID:` prefixes if every non-empty line has one; otherwise undefined. */
+function stripLinePrefixes(text: string): string | undefined {
+  const lines = text.split("\n");
+  const filled = lines.filter((line) => line.length > 0);
+  if (filled.length === 0 || !filled.every((line) => LINE_PREFIX.test(line))) return undefined;
+  return lines.map((line) => line.replace(LINE_PREFIX, "")).join("\n");
 }
 
 // --- locating text ------------------------------------------------------------
@@ -710,6 +738,9 @@ const PREVIEW_COLUMNS = 120;
 const MAX_LISTED_MATCHES = 5;
 
 function describeNotFound(filePath: string, content: string, oldText: string): string {
+  if (content.trim() === "") {
+    return `Could not find oldText in ${filePath}: the file is empty. Use write_file to put content in it.`;
+  }
   const lines = [`Could not find oldText in ${filePath}.`];
   const closest = findClosestLines(content.split("\n"), oldText.split("\n"));
   const percent = closest === null ? 0 : Math.round(closest.score * 100);

@@ -19,7 +19,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DynoCategory, DynoTask, GradeResult } from "../types.js";
 import { BUILTIN_SUITE, getTask, selectTasks } from "./index.js";
-import { git, httpGetWithRetry, killListeners, listFiles, pythonCode, run, startDetached, treeDigest, writeFiles } from "./helpers.js";
+import { git, httpGetWithRetry, killListeners, listFiles, pythonCode, run, startDetached, treeDigest, withPortLock, writeFiles } from "./helpers.js";
 import { SERVE_PORT } from "./tasks/multi-serve-manifest.js";
 
 vi.setConfig({ testTimeout: 90_000, hookTimeout: 30_000 });
@@ -32,12 +32,15 @@ function freshDir(): string {
   return dir;
 }
 
-/** Tasks whose grade needs a live process on a fixed port, so their pipelines must not overlap. */
+/**
+ * Tasks whose grade needs a live process on a fixed port. Their pipelines must
+ * not overlap with each other, nor with another process running this same file.
+ */
 const PORT_TASKS = new Set(["multi-step-serve-manifest"]);
 
 let exclusiveTail: Promise<unknown> = Promise.resolve();
 function exclusive<T>(fn: () => Promise<T>): Promise<T> {
-  const run = exclusiveTail.then(fn, fn);
+  const run = exclusiveTail.then(() => withPortLock(SERVE_PORT, fn));
   exclusiveTail = run.catch(() => undefined);
   return run;
 }
@@ -498,7 +501,7 @@ beforeAll(() => {
 
 afterAll(async () => {
   await Promise.allSettled([...validations.values(), ...cheatResults.values(), ...wrongResults.values()]);
-  await killListeners(SERVE_PORT);
+  await withPortLock(SERVE_PORT, () => killListeners(SERVE_PORT));
   for (const dir of tempDirs) fs.rmSync(dir, { recursive: true, force: true });
 });
 

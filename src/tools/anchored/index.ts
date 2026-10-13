@@ -243,15 +243,16 @@ function describeResult(
 export const editAnchoredToolDefinition: ToolDefinition = {
   name: "edit_anchored",
   description: [
-    "Edit an existing file by citing line anchors instead of retyping old text. In this mode read_file shows every line as `LINE#ID:content`, e.g. `23#PM:  const t = 5;`; `23#PM` is the anchor (line number plus a two-letter content ID). Copy anchors exactly; never guess them.",
-    "Send ONE call per file containing all its operations. Every anchor is checked against the same snapshot before anything is written (a stale anchor rejects the whole call and the error shows the current anchors with >>> marking changed lines: retry with those), and operations are applied bottom-up, so always use the anchors from your last read, not adjusted line numbers.",
+    "Edit an existing file by citing `LINE#ID` anchors instead of retyping old text; in this mode read_file shows every line as `LINE#ID:content`. Send one call per file with all its operations (replace, append, prepend, insert).",
+    "An anchor is the line number plus a two-letter content ID, for example `23#PM` for the row `23#PM:  const t = 5;`. Copy anchors exactly from read_file output or from an error message; never guess them.",
+    "Every anchor is checked against the same snapshot before anything is written. A stale anchor rejects the whole call and the error shows the current anchors, with >>> marking the changed lines: retry with those. Operations are applied bottom-up, so always use the anchors from your last read, not adjusted line numbers.",
     "Operations (field `op`):",
     "- replace one line: {op:\"replace\", tag:\"23#PM\", content:[\"  const t = 30;\"]}.",
     "- replace a range: {op:\"replace\", first:\"60#BB\", last:\"63#PN\", content:[...]}. Omit content (or pass []) to delete the line or range; content:[\"\"] keeps one blank line.",
-    "- append after a line: {op:\"append\", after:\"260#QX\", content:[...]}; omit `after` to append at end of file.",
+    "- append after a line: {op:\"append\", after:\"260#QX\", content:[...]}; omit `after` to append at the end of the file.",
     "- prepend before a line: {op:\"prepend\", before:\"1#QX\", content:[...]}; omit `before` to insert at the start of the file.",
     "- insert between two adjacent lines: {op:\"insert\", after:\"44#ZR\", before:\"45#BB\", content:[...]} (safest for adding a block).",
-    "`content` is an array of lines WITHOUT the `LINE#ID:` prefix and without trailing newlines; keep the file's indentation and formatting. Pick the smallest operation per change, anchor inserts on structural lines (`}`, `]`, a function header) rather than blank lines, do not touch unrelated lines, and do not send replacements identical to the current text.",
+    "`content` is an array of lines WITHOUT the `LINE#ID:` prefix and without trailing newlines; keep the file's indentation and formatting. Pick the smallest operation per change, anchor inserts on structural lines (a closing brace, a function header) rather than blank lines, do not touch unrelated lines, and do not send replacements identical to the current text.",
     "The result shows a unified diff and fresh anchors for the edited region so you can chain a follow-up edit there. If lines were added or removed, line numbers below the edit shift: re-read before editing elsewhere. `rename` moves the file to a new path (fails if it exists).",
   ].join("\n"),
   parameters: {

@@ -32,6 +32,8 @@ const DEFAULT_MAX_LINES = 400;
  */
 const MAX_EDIT_DISTANCE = 3_000;
 const NO_EOL_MARKER = "\\ No newline at end of file";
+/** Display width of one diff row; a minified file must not flood the context. */
+const MAX_DIFF_LINE_CHARS = 500;
 
 interface SplitText {
   /** Display lines: terminators removed, including a trailing `\r`. */
@@ -297,7 +299,7 @@ function buildHunks(blocks: LineBlock[], oldText: SplitText, newText: SplitText,
 
     const body: string[] = [];
     const contextLine = (oldIndex: number): void => {
-      body.push(` ${oldText.lines[oldIndex]}`);
+      body.push(` ${clipRow(oldText.lines[oldIndex])}`);
       // Equal lines share their terminator status, so the old side decides.
       if (isUnterminated(oldText, oldIndex)) body.push(NO_EOL_MARKER);
     };
@@ -312,11 +314,11 @@ function buildHunks(blocks: LineBlock[], oldText: SplitText, newText: SplitText,
         }
       }
       for (let i = block.oldStart; i < block.oldEnd; i += 1) {
-        body.push(`-${oldText.lines[i]}`);
+        body.push(`-${clipRow(oldText.lines[i])}`);
         if (isUnterminated(oldText, i)) body.push(NO_EOL_MARKER);
       }
       for (let i = block.newStart; i < block.newEnd; i += 1) {
-        body.push(`+${newText.lines[i]}`);
+        body.push(`+${clipRow(newText.lines[i])}`);
         if (isUnterminated(newText, i)) body.push(NO_EOL_MARKER);
       }
     }
@@ -335,6 +337,12 @@ function buildHunks(blocks: LineBlock[], oldText: SplitText, newText: SplitText,
     index = last + 1;
   }
   return hunks;
+}
+
+function clipRow(line: string): string {
+  return line.length > MAX_DIFF_LINE_CHARS
+    ? `${line.slice(0, MAX_DIFF_LINE_CHARS)}… [${line.length - MAX_DIFF_LINE_CHARS} more characters]`
+    : line;
 }
 
 function isUnterminated(text: SplitText, index: number): boolean {
