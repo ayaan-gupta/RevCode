@@ -12,6 +12,7 @@
  * (which are lower precedence than the command line) never override them.
  */
 
+import { readFileSync } from "node:fs";
 import { isLlmProvider, LLM_PROVIDERS, type LlmProvider } from "./llm/client.js";
 import type { LoadedConfig } from "./config/config.js";
 import { PERMISSION_MODES, type PermissionMode } from "./agent/permissions.js";
@@ -44,6 +45,11 @@ export interface CliArgs {
   headless: boolean;
   /** Task instruction for headless mode. */
   prompt?: string;
+  /**
+   * Read the task instruction from this file instead. Keeps the (possibly long) task text out of
+   * the process command line, where a model's `pkill -f <word>` could match the agent itself.
+   */
+  promptFile?: string;
   /** Output path for JSONL trajectory logs. */
   trajectoryOut?: string;
   /** Maximum tool loop iterations per user turn. */
@@ -113,6 +119,7 @@ const FLAGS: Record<string, FlagSpec> = {
   "--base-url": { key: "baseUrl", kind: "string" },
   "--headless": { key: "headless", kind: "boolean" },
   "--prompt": { key: "prompt", kind: "string", aliases: ["-p"] },
+  "--prompt-file": { key: "promptFile", kind: "string" },
   "--trajectory-out": { key: "trajectoryOut", kind: "string" },
   "--max-iterations": { key: "maxIterations", kind: "int" },
   "--mode": { key: "permissionMode", kind: "string" },
@@ -372,6 +379,14 @@ export function resolveArgs(args: CliArgs, loaded: LoadedConfig, env: NodeJS.Pro
   const explicit = new Set(args.explicit ?? []);
   const out: CliArgs = { ...args };
 
+  if (out.promptFile) {
+    try {
+      out.prompt = readFileSync(out.promptFile, "utf8").replace(/\r?\n$/, "");
+    } catch (error) {
+      throw new Error(`--prompt-file could not be read: ${out.promptFile} (${error instanceof Error ? error.message : String(error)})`);
+    }
+  }
+
   if (!explicit.has("model") && config.model) out.model = config.model;
   if (!explicit.has("provider") && config.provider && isLlmProvider(config.provider)) out.provider = config.provider;
   if (!explicit.has("model") && !config.model && out.provider) {
@@ -420,6 +435,7 @@ Common flags:
       --base-url <url>      API base URL (OpenAI-compatible servers, proxies)
       --cwd <path>          working directory
   -p, --prompt <text>       task for --headless
+      --prompt-file <path>  read the task for --headless from a file
       --headless            run one task and exit
       --output-format <f>   text | json | stream-json (headless)
       --mode <mode>         ask | accept-edits | plan | yolo   (default: ask; yolo when headless)

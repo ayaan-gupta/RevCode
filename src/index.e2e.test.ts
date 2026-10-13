@@ -56,6 +56,22 @@ describe("revcode CLI (end to end)", () => {
     expect(summary).toMatchObject({ stopReason: "complete", toolCalls: 1, model: "test" });
   });
 
+  it("reads the task from --prompt-file, keeping it out of the process command line", () => {
+    const promptFile = path.join(dir, "task.txt");
+    writeFileSync(promptFile, '/tool read_file {"path":"note.txt"}\n');
+    const result = revcode(
+      ["--headless", "--provider", "local-test", "--model", "test", "--no-snapshot", "--no-instructions", "--prompt-file", promptFile],
+      dir,
+      home,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("hello e2e");
+
+    const missing = revcode(["--headless", "--provider", "local-test", "--model", "test", "--prompt-file", path.join(dir, "nope.txt")], dir, home);
+    expect(missing.status).not.toBe(0);
+    expect(missing.stderr + missing.stdout).toContain("--prompt-file could not be read");
+  });
+
   it("refuses a working directory that does not exist", () => {
     const result = revcode(
       ["run", "--provider", "local-test", "--model", "test", "--cwd", "/definitely/not/a/real/dir", "hi"],
