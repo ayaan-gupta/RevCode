@@ -53,6 +53,8 @@ export interface CliArgs {
   snapshot?: boolean;
   mcp?: boolean;
   hooks?: boolean;
+  /** Load AGENTS.md / CLAUDE.md project instructions (default true). */
+  instructions?: boolean;
   verbose?: boolean;
   /** Flag keys set explicitly on the command line. */
   explicit?: string[];
@@ -72,6 +74,8 @@ export interface TuneOptions {
   noSave: boolean;
   /** Edit modes to consider (default: all implemented). */
   editModes?: string[];
+  /** Skip the confirmation about running the model with an unrestricted shell. */
+  yes: boolean;
 }
 
 export type Command =
@@ -112,6 +116,7 @@ const FLAGS: Record<string, FlagSpec> = {
   "--snapshot": { key: "snapshot", kind: "boolean" },
   "--mcp": { key: "mcp", kind: "boolean" },
   "--hooks": { key: "hooks", kind: "boolean" },
+  "--instructions": { key: "instructions", kind: "boolean" },
   "--verbose": { key: "verbose", kind: "boolean" },
 };
 
@@ -131,6 +136,7 @@ const TUNE_FLAGS: Record<string, { key: keyof TuneOptions; kind: FlagKind }> = {
   "--card": { key: "cardOut", kind: "string" },
   "--no-save": { key: "noSave", kind: "boolean" },
   "--edit-modes": { key: "editModes", kind: "list" },
+  "--yes": { key: "yes", kind: "boolean" },
 };
 
 export function defaultArgs(): CliArgs {
@@ -219,6 +225,7 @@ function parseFlags(
       arg = arg.slice(0, eq);
     }
     arg = SHORT_ALIASES.get(arg) ?? arg;
+    if (options.tune && arg === "-y") arg = "--yes";
 
     // Boolean negation: --no-snapshot, --no-mcp, --no-hooks, --no-universe
     if (arg.startsWith("--no-") && FLAGS[`--${arg.slice(5)}`]?.kind === "boolean") {
@@ -310,6 +317,7 @@ function finishTune(raw: Partial<TuneOptions>): TuneOptions {
     cardOut: raw.cardOut,
     noSave: raw.noSave ?? false,
     editModes: raw.editModes,
+    yes: raw.yes ?? false,
   };
 }
 
@@ -371,6 +379,7 @@ export function resolveArgs(args: CliArgs, loaded: LoadedConfig, env: NodeJS.Pro
   if (!explicit.has("snapshot")) out.snapshot = config.snapshot ?? true;
   if (!explicit.has("mcp")) out.mcp = config.mcp ?? true;
   if (!explicit.has("hooks")) out.hooks = config.hooks ?? true;
+  if (!explicit.has("instructions")) out.instructions = true;
   out.outputFormat = out.outputFormat ?? "text";
   return out;
 }
@@ -403,7 +412,7 @@ Common flags:
       --time-budget <sec>   wall-clock budget (nudges the model, stops cleanly near the limit)
       --max-iterations <n>  tool-loop limit per turn
       --trajectory-out <f>  write a JSONL trajectory
-      --no-snapshot --no-mcp --no-hooks   disable startup environment snapshot / MCP servers / hooks
+      --no-snapshot --no-mcp --no-hooks --no-instructions   disable the startup environment snapshot / MCP servers / hooks / AGENTS.md
 
 Environment: Z_AI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, OLLAMA_HOST,
 REVCODE_BASE_URL / REVCODE_API_KEY (generic OpenAI-compatible), REVCODE_HOME, REVCODE_TIME_BUDGET_SEC.

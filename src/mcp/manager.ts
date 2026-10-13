@@ -34,6 +34,7 @@
  */
 
 import {
+  DEFAULT_REQUEST_TIMEOUT_MS,
   McpClient,
   type McpToolInfo,
   type McpServerInfo,
@@ -51,7 +52,7 @@ export interface McpManagerOptions {
   cwd?: string;
   /** Per-server startup budget (connect + handshake + first tool list). Default 15s. */
   startupTimeoutMs?: number;
-  /** Default per-request timeout for tool calls. Default 60s. */
+  /** Default timeout for a single tool call (a server's `timeoutMs` overrides it). Default 60s. */
   requestTimeoutMs?: number;
   /** Maximum characters of tool result text returned to the model. Default 30,000. */
   maxResultChars?: number;
@@ -230,9 +231,11 @@ export class McpManager {
     let client: McpClient | undefined;
     try {
       const transport = (this.options.transportFactory ?? defaultTransportFactory)(config, this.cwd);
+      // The client-wide default covers the handshake and tools/list refreshes, so it
+      // follows the startup budget; tool calls get their own (usually longer) timeout.
       client = new McpClient(transport, {
         label: config.name,
-        requestTimeoutMs: config.timeoutMs ?? this.options.requestTimeoutMs,
+        requestTimeoutMs: timeoutMs,
         ...(this.options.clientInfo ? { clientInfo: this.options.clientInfo } : {}),
       });
       entry.client = client;
@@ -336,7 +339,7 @@ export class McpManager {
     const args = isRecord(input) ? input : {};
     try {
       const output = await entry.client.callTool(toolName, args, {
-        ...(entry.config.timeoutMs !== undefined ? { timeoutMs: entry.config.timeoutMs } : {}),
+        timeoutMs: entry.config.timeoutMs ?? this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       });
       return limitOutput(output, this.options.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS);
     } catch (error) {

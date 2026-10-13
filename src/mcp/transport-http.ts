@@ -146,7 +146,11 @@ abstract class HttpTransportBase implements McpTransport {
       if (message) {
         delivered += 1;
         observe?.(message);
-        this.onmessage?.(message);
+        try {
+          this.onmessage?.(message);
+        } catch (error) {
+          this.diagnose(`message handler threw: ${error instanceof Error ? error.message : String(error)}`);
+        }
       } else {
         this.diagnose(`ignoring non-JSON-RPC payload: ${preview(text)}`);
       }
@@ -285,7 +289,9 @@ export class StreamableHttpTransport extends HttpTransportBase {
         release();
         return;
       }
-      void this.pumpPostStream(res.body, requestId).finally(release);
+      this.pumpPostStream(res.body, requestId)
+        .catch(() => undefined)
+        .finally(release);
       return;
     }
 

@@ -99,8 +99,6 @@ export interface McpClientEvents {
 }
 
 interface PendingRequest {
-  method: string;
-  timeoutMs: number;
   timer: NodeJS.Timeout;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -130,7 +128,7 @@ export class McpClient extends EventEmitter<McpClientEvents> {
     this.requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     transport.onmessage = (message) => this.handleMessage(message);
     transport.onclose = (error) => this.handleClose(error);
-    transport.ondiagnostic = (text) => this.emit("log", text);
+    transport.ondiagnostic = (text) => this.safeEmit("log", text);
   }
 
   /** Tools as of the last successful `listTools()` / refresh. */
@@ -237,7 +235,7 @@ export class McpClient extends EventEmitter<McpClientEvents> {
           );
         }
       }, timeoutMs);
-      this.pending.set(id, { method, timeoutMs, timer, resolve, reject });
+      this.pending.set(id, { timer, resolve, reject });
 
       const message: JsonRpcRequest = {
         jsonrpc: "2.0",
@@ -292,7 +290,7 @@ export class McpClient extends EventEmitter<McpClientEvents> {
       );
     }
     if (!SUPPORTED_PROTOCOL_VERSIONS.includes(result.protocolVersion)) {
-      this.emit(
+      this.safeEmit(
         "log",
         `server speaks protocol ${result.protocolVersion}, which this client has not been verified against; continuing`,
       );
@@ -307,6 +305,16 @@ export class McpClient extends EventEmitter<McpClientEvents> {
   private async doClose(): Promise<void> {
     this.markClosed(undefined);
     await this.transport.close();
+  }
+
+  /** Emit without letting a buggy listener break the protocol loop. */
+  private safeEmit<K extends keyof McpClientEvents>(event: K, ...args: McpClientEvents[K]): void {
+    try {
+      const emit = this.emit.bind(this) as (name: keyof McpClientEvents, ...payload: unknown[]) => boolean;
+      emit(event, ...args);
+    } catch {
+      // listener errors are the listener's problem
+    }
   }
 
   private closedError(): McpError {
@@ -329,7 +337,7 @@ export class McpClient extends EventEmitter<McpClientEvents> {
       this.pending.delete(id);
       entry.reject(failure);
     }
-    this.emit("closed", error);
+    this.safeEmit("closed", error);
   }
 
   private handleClose(error: Error | undefined): void {
@@ -348,7 +356,7 @@ export class McpClient extends EventEmitter<McpClientEvents> {
 
   private handleResponse(message: JsonRpcResponse): void {
     if (message.id === null) {
-      this.emit("log", `server sent a response without a request id${"error" in message ? `: ${message.error.message}` : ""}`);
+      this.safeEmit("log", `server sent a response without a request id${"error" in message ? `: ${message.error.message}` : ""}`);
       return;
     }
     // Tolerate servers that echo our numeric ids back as strings.
@@ -395,7 +403,7 @@ export class McpClient extends EventEmitter<McpClientEvents> {
     try {
       await this.transport.send(response);
     } catch (error) {
-      this.emit("log", `could not answer server request "${request.method}": ${toMcpError(error).message}`);
+      this.safeEmit("log", `could not answer server request "${request.method}": ${toMcpError(error).message}`);
     }
   }
 
@@ -421,9 +429,9 @@ export class McpClient extends EventEmitter<McpClientEvents> {
         this.refreshAgain = false;
         try {
           const tools = await this.listTools();
-          this.emit("toolsChanged", tools);
+          this.safeEmit("toolsChanged", tools);
         } catch (error) {
-          this.emit("log", `tools/list refresh failed: ${toMcpError(error).message}`);
+          this.safeEmit("log", `tools/list refresh failed: ${toMcpError(error).message}`);
         }
       } while (this.refreshAgain && !this.closed);
     })().finally(() => {

@@ -38,6 +38,12 @@ export interface PermissionOptions {
   approver?: Approver;
   /** Tools that never need approval (read-only built-ins and read-only MCP tools). */
   isReadOnly?: (toolName: string) => boolean;
+  /**
+   * What a PreToolUse hook said about this call: "ask" forces a prompt even if
+   * rules or the mode would allow it; "allow" waives the prompt. Never overrides
+   * deny rules, plan mode, or the catastrophic-command refusal.
+   */
+  hookDecision?: (callId: string) => "allow" | "deny" | "ask" | undefined;
 }
 
 export type Evaluation =
@@ -46,7 +52,7 @@ export type Evaluation =
   | { action: "ask"; reason: string; summary: string };
 
 const EDIT_TOOLS = new Set(["write_file", "edit_file", "apply_patch", "edit_anchored", "delete_file"]);
-const ALWAYS_ALLOWED = new Set(["update_plan", "use_skill"]);
+const ALWAYS_ALLOWED = new Set(["update_plan", "use_skill", "task"]);
 
 export class PermissionManager {
   private mode: PermissionMode;
@@ -54,6 +60,7 @@ export class PermissionManager {
   private readonly denyRules: string[];
   private approver?: Approver;
   private readonly isReadOnly: (toolName: string) => boolean;
+  private readonly hookDecision?: PermissionOptions["hookDecision"];
   /** Serializes prompts so two approvals never fight over the terminal. */
   private promptQueue: Promise<unknown> = Promise.resolve();
 
@@ -63,6 +70,7 @@ export class PermissionManager {
     this.denyRules = [...(options.deny ?? [])];
     this.approver = options.approver;
     this.isReadOnly = options.isReadOnly ?? (() => false);
+    this.hookDecision = options.hookDecision;
   }
 
   getMode(): PermissionMode {
@@ -156,7 +164,17 @@ export class PermissionManager {
   }
 
   private async decide({ call }: ToolCallContext): Promise<ToolDecision> {
-    const evaluation = this.evaluate(call.name, call.arguments);
+    let evaluation = this.evaluate(call.name, call.arguments);
+    const hook = this.hookDecision?.(call.id);
+    if (hook === "ask" && evaluation.action === "allow" && this.mode !== "plan" && !this.isReadOnly(call.name)) {
+      evaluation = {
+        action: "ask",
+        reason: "A hook requires confirmation.",
+        summary: call.name === "shell" ? String(call.arguments.command ?? "") : `${call.name} ${String(call.arguments.path ?? "")}`.trim(),
+      };
+    } else if (hook === "allow" && evaluation.action === "ask") {
+      evaluation = { action: "allow", reason: "allowed by a hook" };
+    }
     if (evaluation.action === "allow") {
       return { allow: true };
     }

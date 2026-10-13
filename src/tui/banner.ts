@@ -1,8 +1,13 @@
 import figlet from "figlet";
 import { applyHorizontalGradient } from "./ansi.js";
+import { ANSI_SHADOW_FLF } from "./ansi-shadow-font.js";
 import { GRADIENT_END, GRADIENT_MID, GRADIENT_START } from "./theme.js";
 
 const BANNER_FONT = "ANSI Shadow";
+
+// Registered from memory: figlet's own font loader reads files relative to its
+// install directory, which does not exist inside the single-file bundle.
+figlet.parseFont(BANNER_FONT, ANSI_SHADOW_FLF);
 
 function normalizeBannerLines(lines: string[]): string[] {
   const trimmed = [...lines];

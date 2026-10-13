@@ -53,6 +53,13 @@ export interface UniverseMeta {
   lastLandedAt?: string;
 }
 
+export interface FileChange {
+  path: string;
+  status: "A" | "M" | "D";
+  insertions: number;
+  deletions: number;
+}
+
 export type CheckpointKind = "base" | "tool" | "turn" | "rewind" | "fork" | "land";
 
 export interface Checkpoint {
@@ -348,10 +355,14 @@ export class Universe {
       };
       const child = new Universe(meta, dir);
 
-      // Carry the lineage so the fork's timeline reads as one continuous story.
-      const upto = sourceCheckpoint?.n ?? Number.POSITIVE_INFINITY;
-      for (const entry of this.timeline()) {
-        if (entry.type === "checkpoint" && entry.n > upto) continue;
+      // Carry the lineage up to the fork point so the fork's timeline reads as one
+      // continuous story. The timeline is append-only, so position is authoritative:
+      // everything after the fork point's checkpoint belongs to the parent alone.
+      const entries = this.timeline();
+      const cut = sourceCheckpoint
+        ? entries.findIndex((entry) => entry.type === "checkpoint" && entry.n === sourceCheckpoint.n)
+        : entries.length - 1;
+      for (const entry of entries.slice(0, cut + 1)) {
         child.appendTimeline(entry);
       }
       child.saveMeta();
@@ -379,6 +390,47 @@ export class Universe {
       args.push("--", ...paths);
     }
     return (await runShadowGit(this.handle, args)).stdout.toString("utf8");
+  }
+
+  /** Per-file changes between two snapshots of this universe (status + line counts). */
+  async changesBetween(from: string, to: string): Promise<FileChange[]> {
+    if (from === to) {
+      return [];
+    }
+    const status = (
+      await runShadowGit(this.handle, ["diff", "--name-status", "-z", "--no-renames", from, to])
+    ).stdout
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean);
+    const counts = new Map<string, { insertions: number; deletions: number }>();
+    const numstat = (await runShadowGit(this.handle, ["diff", "--numstat", "-z", "--no-renames", from, to])).stdout
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean);
+    for (const record of numstat) {
+      const [add, del, ...rest] = record.split("\t");
+      counts.set(rest.join("\t"), { insertions: Number(add) || 0, deletions: Number(del) || 0 });
+    }
+    const changes: FileChange[] = [];
+    for (let i = 0; i + 1 < status.length; i += 2) {
+      const code = status[i][0] as "A" | "M" | "D" | "T";
+      const file = status[i + 1];
+      changes.push({ path: file, status: code === "T" ? "M" : code, ...(counts.get(file) ?? { insertions: 0, deletions: 0 }) });
+    }
+    return changes;
+  }
+
+  /** Which of `paths` already existed when the universe was created. */
+  async existedAtBase(paths: string[]): Promise<Set<string>> {
+    if (paths.length === 0) {
+      return new Set();
+    }
+    const out = (await runShadowGit(this.handle, ["ls-tree", "-r", "--name-only", "-z", this.meta.baseSha, "--", ...paths])).stdout
+      .toString("utf8")
+      .split("\0")
+      .filter(Boolean);
+    return new Set(out);
   }
 
   async diffStat(): Promise<{ files: number; insertions: number; deletions: number }> {

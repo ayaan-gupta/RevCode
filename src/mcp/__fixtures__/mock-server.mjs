@@ -16,8 +16,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 const env = process.env;
 
 if (env.MOCK_EXIT_ON_START) {
-  process.stderr.write("boom: missing API key (MOCK_EXIT_ON_START)\n");
-  process.exit(3);
+  // Exit from the write callback so the message is flushed before the process dies.
+  process.stderr.write("boom: missing API key (MOCK_EXIT_ON_START)\n", () => process.exit(3));
 }
 
 const PAGE_SIZE = Number(env.MOCK_PAGE_SIZE ?? 2);
@@ -108,9 +108,8 @@ async function callTool(name, args) {
     case "big":
       return { content: [{ type: "text", text: `${"abcdefghij".repeat(Math.ceil(Number(args.chars ?? 100) / 10))}`.slice(0, Number(args.chars ?? 100)) }] };
     case "crash":
-      process.stderr.write("fatal: the crash tool was invoked\n");
-      process.exit(7);
-      return undefined;
+      process.stderr.write("fatal: the crash tool was invoked\n", () => process.exit(7));
+      return new Promise(() => {}); // never answers: the process is about to die
     case "probe": {
       const ping = await askClient("ping", {});
       const roots = await askClient("roots/list", {});

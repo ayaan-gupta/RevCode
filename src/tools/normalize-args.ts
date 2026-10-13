@@ -70,10 +70,12 @@ function normalizeObject(
     out[name] = coerce(value, props[name] ?? {}, notes, `${prefix}${name}`);
   }
 
-  // 3. Unknown keys: keep them only if the schema does not forbid them.
+  // 3. Unknown keys: JSON Schema permits extras unless the schema says otherwise, so
+  //    only drop them when it explicitly forbids them (all built-in tools do; many MCP
+  //    tools do not, and must keep their extra arguments).
   const leftover = Object.keys(remaining);
   if (leftover.length > 0) {
-    if (schema.additionalProperties === false || Object.keys(props).length > 0) {
+    if (schema.additionalProperties === false) {
       notes.push(`ignored unknown argument${leftover.length > 1 ? "s" : ""}: ${leftover.map((k) => prefix + k).join(", ")}`);
     } else {
       Object.assign(out, remaining);

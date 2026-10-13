@@ -12,7 +12,20 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 #: API keys passed into the container's agent process (never written to disk).
-_API_KEY_NAMES = ("Z_AI_API_KEY", "ZAI_API_KEY", "ANTHROPIC_API_KEY", "Z_AI_BASE_URL")
+_API_KEY_NAMES = (
+    "Z_AI_API_KEY",
+    "ZAI_API_KEY",
+    "Z_AI_BASE_URL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_BASE_URL",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "OPENROUTER_API_KEY",
+    "REVCODE_API_KEY",
+    "REVCODE_BASE_URL",
+    # Wall-clock budget (seconds): RevCode nudges the model as time runs out and stops cleanly.
+    "REVCODE_TIME_BUDGET_SEC",
+)
 
 
 def _load_repo_env(repo_root: Path) -> dict[str, str]:
@@ -54,15 +67,20 @@ class RevCodeAgent(BaseInstalledAgent):
 
     TRAJECTORY_PATH = "/tmp/revcode-trajectory.jsonl"
     BUNDLE_REMOTE_PATH = "/opt/revcode/revcode.mjs"
-    MODEL = "glm-5.2"
-    MAX_ITERATIONS = 50
+    PROFILE_REMOTE_PATH = "/opt/revcode/profile.json"
+    # Overridable from the host environment so the same adapter can benchmark any
+    # provider/model, optionally with a Dyno-tuned profile (`revcode tune`).
+    MODEL = os.environ.get("REVCODE_EVAL_MODEL", "glm-5.2")
+    PROVIDER = os.environ.get("REVCODE_EVAL_PROVIDER", "zai")
+    # Iterations are a safety net, not the limit: the wall-clock budget is.
+    MAX_ITERATIONS = int(os.environ.get("REVCODE_EVAL_MAX_ITERATIONS", "300"))
 
     @staticmethod
     def name() -> str:
         return "revcode"
 
     def version(self) -> str | None:
-        return "0.0.2"
+        return "0.1.0"
 
     async def install(self, environment: BaseEnvironment) -> None:
         # Node + ripgrep only — no npm install/build inside the container.
@@ -83,6 +101,11 @@ class RevCodeAgent(BaseInstalledAgent):
             )
         await environment.upload_file(str(bundle), self.BUNDLE_REMOTE_PATH)
 
+        profile = os.environ.get("REVCODE_EVAL_PROFILE")
+        if profile and Path(profile).expanduser().exists():
+            await environment.upload_file(str(Path(profile).expanduser()), self.PROFILE_REMOTE_PATH)
+            self._uploaded_profile = True
+
     @with_prompt_template
     async def run(
         self,
@@ -92,14 +115,23 @@ class RevCodeAgent(BaseInstalledAgent):
     ) -> None:
         quoted_instruction = shlex.quote(instruction)
         quoted_trajectory = shlex.quote(self.TRAJECTORY_PATH)
+        profile_flag = (
+            f"--profile {self.PROFILE_REMOTE_PATH} "
+            if getattr(self, "_uploaded_profile", False)
+            else "--profile default "
+        )
+        # Hermetic by design: never read project instructions, hooks or MCP config from
+        # the task directory, so results depend only on the model and the harness.
         command = (
             f"node {self.BUNDLE_REMOTE_PATH} --headless "
             f"--prompt {quoted_instruction} "
             f"--trajectory-out {quoted_trajectory} "
             "--cwd /app "
-            "--provider zai "
+            f"--provider {self.PROVIDER} "
             f"--model {self.MODEL} "
-            f"--max-iterations {self.MAX_ITERATIONS}"
+            f"--max-iterations {self.MAX_ITERATIONS} "
+            f"{profile_flag}"
+            "--no-instructions --no-hooks --no-mcp"
         )
         api_env = _resolve_api_env(Path(__file__).resolve().parents[1])
         await self.exec_as_agent(environment, command=command, env=api_env)

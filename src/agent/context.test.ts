@@ -90,3 +90,30 @@ describe("forceCompact", () => {
     expect(readMsg?.content).toContain("ENOENT");
   });
 });
+
+describe("trimming old payloads", () => {
+  it("elides large arguments and old successful shell output outside the recent window, keeping errors", () => {
+    const big = "y".repeat(5_000);
+    const messages: LlmMessage[] = [
+      { role: "system", content: "sys" },
+      { role: "user", content: "task" },
+      { role: "assistant", content: "", toolCalls: [{ id: "w1", name: "write_file", arguments: { path: "big.py", content: big } }] },
+      { role: "tool", toolCallId: "w1", name: "write_file", content: JSON.stringify({ toolCallId: "w1", name: "write_file", result: { path: "big.py" } }) },
+      toolMessage("shell", { stdout: big, exitCode: 0 }, "s1"),
+      toolMessage("shell", { stdout: big, exitCode: 2 }, "s2"),
+    ];
+    for (let i = 0; i < 30; i += 1) messages.push({ role: "assistant", content: "noise" });
+
+    const result = forceCompact(messages, { tokenLimit: 1, keepLastN: 4 });
+    const write = result.messages[2];
+    expect(JSON.stringify(write.toolCalls)).toContain("chars elided");
+    expect(JSON.stringify(write.toolCalls).length).toBeLessThan(800);
+    expect(write.toolCalls?.[0].arguments.path).toBe("big.py");
+
+    const ok = result.messages.find((m) => m.toolCallId === "s1");
+    expect(ok?.content.length).toBeLessThan(2_000);
+    expect(ok?.content).toContain("older output elided");
+    const failed = result.messages.find((m) => m.toolCallId === "s2");
+    expect(failed?.content.length).toBeGreaterThan(4_000);
+  });
+});

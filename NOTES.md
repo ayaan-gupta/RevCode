@@ -1,5 +1,7 @@
 # Agent Anti-Patterns & Fixes
 
+> See README.md and docs/terminal-bench.md for the current harness behaviour; this file is the original manual stress-test fixture.
+
 > **Note (2026-06-30 overhaul):** `shell` now runs in a **persistent session**
 > (`src/tools/shell-session.ts`) — `cd`/env/venv and background servers persist
 > across calls; start long-running processes with `background: true`. The agent

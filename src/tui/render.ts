@@ -7,8 +7,10 @@ import type { SlashCommand } from "./slash-commands.js";
 import { ThinkingSpinner, type SpinnerHandle } from "./spinner.js";
 import {
   COLOR_CYAN,
+  COLOR_MUTED,
   COLOR_PINK,
   COLOR_PURPLE,
+  COLOR_WHITE,
 } from "./theme.js";
 
 export interface RenderContext {
@@ -35,6 +37,7 @@ export class TerminalRenderer {
   private lastInputCursorColumn = 1;
   private mdStream: MarkdownStream | undefined;
   private contextPercent = 0;
+  private statusLabel = "interactive";
 
   constructor(args: CliArgs, isTty: boolean) {
     this.args = args;
@@ -51,6 +54,11 @@ export class TerminalRenderer {
 
   updateModel(model: string): void {
     this.args = { ...this.args, model };
+  }
+
+  /** Short mode label shown in the status bar (e.g. "ask", "yolo · universe u2410…"). */
+  setStatusLabel(label: string): void {
+    this.statusLabel = label;
   }
 
   /** Update the context-usage gauge shown in the status bar (0–100). */
@@ -135,14 +143,14 @@ export class TerminalRenderer {
 
     if (!this.rich) {
       const ctxPlain = ctx ? `  ${ctx}` : "";
-      process.stdout.write(`${cwd}  interactive  ${modelLabel}${ctxPlain}\n`);
+      process.stdout.write(`${cwd}  ${this.statusLabel}  ${modelLabel}${ctxPlain}\n`);
       this.hasStatusBar = true;
       return;
     }
 
     const columns = process.stdout.columns ?? 80;
     const left = rgb(COLOR_CYAN, cwd);
-    const center = rgb(COLOR_PINK, "interactive");
+    const center = rgb(COLOR_PINK, this.statusLabel);
     const right = rgb(COLOR_PURPLE, ctx ? `${modelLabel}  ·  ${ctx}` : modelLabel);
     const gap = "  ";
     const content = `${left}${gap}${center}${gap}${right}`;
@@ -229,6 +237,40 @@ export class TerminalRenderer {
       }
     }
     console.log("");
+  }
+
+  /** Boxed end-of-turn receipt. Lines starting with ⚠ or ✘ are highlighted. */
+  receipt(lines: string[]): void {
+    if (lines.length === 0) {
+      return;
+    }
+    const title = " receipt ";
+    const width = Math.min(process.stdout.columns ?? 80, 100);
+    const rule = (text: string): string => (this.rich ? rgb(COLOR_MUTED, text) : text);
+    console.log(rule(`  ╭─${title}${"─".repeat(Math.max(4, width - title.length - 6))}`));
+    for (const line of lines) {
+      const bad = line.startsWith("⚠") || line.startsWith("✘");
+      const body = this.rich ? (bad ? rgb(COLOR_PINK, line) : line.startsWith("✔") ? rgb([74, 222, 128], line) : dim(line)) : line;
+      console.log(`${rule("  │ ")}${body}`);
+    }
+    console.log(rule(`  ╰${"─".repeat(Math.max(4, width - 6))}`));
+    console.log("");
+  }
+
+  /** Header for a permission prompt; the key is read by tui/approval.ts. */
+  approvalRequest(summary: string, reason: string): void {
+    console.log("");
+    console.log(this.rich ? rgb(COLOR_PINK, `  ⚠ ${reason}`) : `  ! ${reason}`);
+    console.log(this.rich ? `    ${rgb(COLOR_WHITE, summary)}` : `    ${summary}`);
+    process.stdout.write(
+      this.rich
+        ? `  ${dim("Allow?")} ${rgb(COLOR_CYAN, "[y]")}es · ${rgb(COLOR_CYAN, "[n]")}o · ${rgb(COLOR_CYAN, "[a]")}lways  `
+        : "  Allow? [y]es / [n]o / [a]lways ",
+    );
+  }
+
+  approvalAnswered(answer: string): void {
+    console.log(this.rich ? dim(answer) : answer);
   }
 
   assistant(text: string): void {

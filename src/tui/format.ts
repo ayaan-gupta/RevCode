@@ -16,6 +16,10 @@ const TOOL_ICONS: Record<string, string> = {
   glob: "⌕",
   delete_file: "✕",
   update_plan: "☑",
+  apply_patch: "✎",
+  edit_anchored: "✎",
+  use_skill: "✦",
+  task: "⑂",
 };
 
 /** A one-line, human-readable summary of a tool invocation. */
@@ -42,6 +46,16 @@ function describeCall(name: string, args: Record<string, unknown>): string {
       const edits = Array.isArray(args.edits) ? args.edits.length : 0;
       return `${str("path")}${edits ? `  (${edits} edit${edits === 1 ? "" : "s"})` : ""}`;
     }
+    case "apply_patch": {
+      const files = [...String(args.input ?? args.patch ?? "").matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm)].map((m) => m[1].trim());
+      return files.length > 0 ? clip(files.join(", "), 100) : "patch";
+    }
+    case "edit_anchored":
+      return str("path");
+    case "use_skill":
+      return str("name");
+    case "task":
+      return clip(str("description") || str("prompt"), 100);
     case "list_directory":
       return str("path");
     case "grep":

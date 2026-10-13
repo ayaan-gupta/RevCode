@@ -38,6 +38,14 @@ function renderBody(name: string | undefined, r: Record<string, unknown>): strin
     return renderToolResult(name, r.output);
   }
 
+  // MCP tool results: { text, structured? } — show the text as text.
+  if (typeof r.text === "string" && Object.keys(r).every((k) => ["text", "structured", "note", "harnessNote", "hookFeedback"].includes(k))) {
+    return r.structured !== undefined ? `${r.text}\n\n${JSON.stringify(r.structured, null, 2)}` : r.text || "(empty output)";
+  }
+  if (r.structured !== undefined && Object.keys(r).every((k) => ["structured", "note", "harnessNote", "hookFeedback"].includes(k))) {
+    return JSON.stringify(r.structured, null, 2);
+  }
+
   switch (name) {
     case "shell":
       return renderShell(r);

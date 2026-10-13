@@ -35,6 +35,8 @@ export interface HarnessProfile {
   compactTrigger: number;
   /** Challenge "done" once if files changed but nothing was verified. */
   verifyGate: boolean;
+  /** Headless runs: audit the work against the original task before accepting "done". */
+  completionGate: boolean;
 }
 
 export const DEFAULT_PROFILE: Readonly<HarnessProfile> = Object.freeze({
@@ -48,6 +50,7 @@ export const DEFAULT_PROFILE: Readonly<HarnessProfile> = Object.freeze({
   contextLimit: 120_000,
   compactTrigger: 0.7,
   verifyGate: true,
+  completionGate: true,
 });
 
 /** The knobs Dyno is allowed to turn, with their candidate values. */
@@ -58,6 +61,7 @@ export const PROFILE_SEARCH_SPACE = {
   parallelTools: [true, false],
   temperature: [0, 0.2, 0.6],
   verifyGate: [true, false],
+  completionGate: [true, false],
 } as const satisfies Partial<Record<keyof HarnessProfile, readonly unknown[]>>;
 
 export type TunableKnob = keyof typeof PROFILE_SEARCH_SPACE;
@@ -87,6 +91,7 @@ export function sanitizeProfile(raw: unknown, base: HarnessProfile = DEFAULT_PRO
     contextLimit: Math.round(num(input.contextLimit, base.contextLimit, 4_000, 2_000_000)),
     compactTrigger: num(input.compactTrigger, base.compactTrigger, 0.2, 0.95),
     verifyGate: bool(input.verifyGate, base.verifyGate),
+    completionGate: bool(input.completionGate, base.completionGate),
   };
 }
 

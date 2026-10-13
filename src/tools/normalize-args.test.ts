@@ -64,4 +64,13 @@ describe("normalizeToolArgs", () => {
     const { args } = normalizeToolArgs({ cmd: "ls", timeout_sec: "30" }, shell);
     expect(args).toEqual({ command: "ls", timeout: 30 });
   });
+
+  it("keeps extra arguments when the schema permits them (e.g. MCP tools)", () => {
+    const open = { type: "object", properties: { query: { type: "string" } } };
+    const { args, notes } = normalizeToolArgs({ query: "x", extra: { nested: true } }, open);
+    expect(args).toEqual({ query: "x", extra: { nested: true } });
+    expect(notes).toEqual([]);
+    const explicit = { type: "object", properties: { query: { type: "string" } }, additionalProperties: true };
+    expect(normalizeToolArgs({ query: "x", extra: 1 }, explicit).args).toEqual({ query: "x", extra: 1 });
+  });
 });

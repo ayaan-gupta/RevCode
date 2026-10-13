@@ -32,23 +32,31 @@ describe("TimeBudget", () => {
 });
 
 describe("completion gate", () => {
-  it("quotes the task, challenges after tool use, and re-challenges only after new activity", () => {
+  const act = (gate: ReturnType<typeof createCompletionGate>, name: string) =>
+    gate.middleware.after?.({ call: { id: "1", name, arguments: {} }, iteration: 0, result: {}, durationMs: 1 });
+
+  it("quotes the task, challenges after real work, and re-challenges only after new activity", () => {
     const gate = createCompletionGate("Write /app/out.txt containing 42");
     const check = () => gate.gate.check({ finalContent: "done", turnToolCalls: 3 });
 
+    act(gate, "shell");
     const first = check();
     expect(first).toContain("Write /app/out.txt containing 42");
     expect(check()).toBeUndefined(); // model confirmed without doing anything new
 
-    gate.middleware.after?.({ call: { id: "1", name: "shell", arguments: {} }, iteration: 0, result: {}, durationMs: 1 });
+    act(gate, "shell");
     expect(check()).toBeDefined(); // it fixed something, so challenge once more
-    gate.middleware.after?.({ call: { id: "2", name: "shell", arguments: {} }, iteration: 0, result: {}, durationMs: 1 });
+    act(gate, "shell");
     expect(check()).toBeUndefined(); // capped at two challenges
   });
 
-  it("never challenges a turn that used no tools", () => {
-    const gate = createCompletionGate("what is 2+2?");
+  it("never challenges a turn that only read things or used no tools", () => {
+    const gate = createCompletionGate("what is 2+2?", 2, (name) => name === "read_file");
     expect(gate.gate.check({ finalContent: "4", turnToolCalls: 0 })).toBeUndefined();
+    act(gate, "read_file");
+    expect(gate.gate.check({ finalContent: "4", turnToolCalls: 1 })).toBeUndefined();
+    act(gate, "write_file");
+    expect(gate.gate.check({ finalContent: "done", turnToolCalls: 2 })).toBeDefined();
   });
 
   it("truncates very long tasks", () => {

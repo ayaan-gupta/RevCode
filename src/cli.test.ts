@@ -37,7 +37,8 @@ describe("parseCommandLine", () => {
     expect(run).toMatchObject({ kind: "run", args: { headless: true, prompt: "fix the bug", model: "m" } });
 
     const tune = parseCommandLine(["tune", "--model", "glm-5.2", "--budget", "30", "--tasks", "a,b", "--dry-run"]);
-    expect(tune).toMatchObject({ kind: "tune", options: { budget: 30, tasks: ["a", "b"], dryRun: true, trials: 1 } });
+    expect(tune).toMatchObject({ kind: "tune", options: { budget: 30, tasks: ["a", "b"], dryRun: true, trials: 1, yes: false } });
+    expect(parseCommandLine(["tune", "-y"])).toMatchObject({ options: { yes: true } });
 
     const uni = parseCommandLine(["universes", "land", "u123", "--markers"]);
     expect(uni).toMatchObject({ kind: "universes", action: "land", rest: ["u123", "--markers"] });

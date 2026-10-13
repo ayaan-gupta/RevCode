@@ -1,121 +1,111 @@
 # RevCode
 
-An AI-powered coding agent for the terminal.
+An AI coding agent for the terminal — with two ideas you won't find in other harnesses:
 
-RevCode understands your codebase, reads and edits files, runs shell commands, and helps you ship faster — all from your command line.
+- **Parallel Universes** — every task can run in an isolated, recorded copy of your project. The agent works with *no permission prompts*; you review one changeset, then **land** it, **rewind** it, **fork** it, **replay** it on another model, or throw it away.
+- **Dyno** — a self-tuning harness. `revcode tune` benchmarks edit formats, prompt styles and tool schemas against *your* model on a built-in suite, and keeps what actually helps — with honest statistics.
 
-## Status
+Plus everything a serious harness needs in 2026: streaming TUI, permission modes, sessions, `AGENTS.md`, MCP, skills, hooks, subagents, multi-provider (Z.ai GLM, Claude, OpenAI, OpenRouter, Ollama, any OpenAI-compatible server).
 
-Active development. Highlights:
+> **Status:** active development. All of the below is covered by automated tests (`npm test`), but **no real-model benchmark numbers are claimed** — see [docs/terminal-bench.md](docs/terminal-bench.md) for what has and hasn't been measured.
 
-- **Persistent, stateful shell** — `cd`, environment, virtualenvs, and background servers persist across `shell` calls (run servers with `background: true`).
-- **Resilient LLM layer** — automatic retry/backoff on transient API errors, plus live streaming.
-- **Agentic loop** — a structured, environment-aware system prompt, a planning tool, position-aware parallel tool execution, and rule-based context compaction for long tasks.
-- **Polished TUI** — streaming Markdown output, colored diffs, tool-call cards, a plan panel, and a context-usage gauge.
-- **Fast evals** — a single-file bundle lets Harbor trials skip `npm install`/build.
-
-Default model: **`glm-5.2`** (Z.ai). Anthropic Claude is supported as a secondary provider.
-
-## Project Structure
-
-```
-src/
-├── index.ts            # Entry point — CLI bootstrap
-├── cli.ts              # Argument parsing
-├── agent/
-│   ├── agent.ts        # Core agent loop (input → LLM → tools → output)
-│   └── context.ts      # Token estimation + rule-based context compaction
-├── llm/
-│   ├── client.ts       # LLM API client abstraction (Z.ai + Anthropic) + streaming
-│   ├── anthropic.ts    # Anthropic Messages API client
-│   ├── retry.ts        # Resilient fetch (retry/backoff on 429/5xx/network)
-│   └── tool-call-parser.ts  # GLM XML / inline JSON fallback parser
-├── tools/
-│   ├── index.ts        # Tool registry
-│   ├── shell.ts        # Shell tool (delegates to the persistent session)
-│   ├── shell-session.ts # Persistent, stateful bash session
-│   ├── plan.ts         # update_plan checklist tool
-│   ├── read.ts / write.ts / edit.ts / delete.ts
-│   └── list.ts / grep.ts / glob.ts
-├── tui/
-│   ├── render.ts       # Terminal UI rendering
-│   ├── markdown.ts     # Streaming Markdown → ANSI renderer
-│   ├── format.ts       # Tool-call cards + colored diffs
-│   ├── input.ts        # Raw-mode line editor
-│   └── banner.ts / spinner.ts / ansi.ts / theme.ts
-└── utils/
-    └── diff.ts         # Diff utilities
-
-eval/                   # Harbor adapters for Terminal Bench
-scripts/bundle.mjs      # esbuild single-file bundler (for fast eval cold-start)
-```
-
-## Getting Started
+## Quick start
 
 ```bash
-cp .env.example .env
-# Add Z_AI_API_KEY and/or ANTHROPIC_API_KEY
-
+cp .env.example .env     # add a key, e.g. Z_AI_API_KEY or ANTHROPIC_API_KEY
 npm install
-npm run dev
+npm run dev              # interactive session (tsx)
 ```
 
-## CLI Options
+```bash
+npm run build && node dist/index.js --help
+npm run bundle           # single-file dist/revcode.mjs (what the eval ships)
+```
 
-| Flag | Description |
-| ---- | ----------- |
-| `--model <name>` | Model id (default: `glm-5.2`; suggested: `glm-5.2`, `glm-4.7`, `glm-4.7-flash`) |
-| `--provider <name>` | `zai`, `anthropic`, or `local-test` |
-| `--cwd <path>` | Working directory |
-| `--headless` | Run a single task and exit |
-| `--prompt <text>` | Task instruction for headless mode |
-| `--trajectory-out <path>` | Write JSONL trajectory log |
-| `--max-iterations <n>` | Tool loop limit (default: 50) |
+Default model is **`glm-5.2`** via Z.ai. Examples:
+
+```bash
+revcode                                   # interactive
+revcode --universe                        # interactive, inside a Parallel Universe
+revcode run "fix the failing tests"       # one headless task
+revcode --provider anthropic --model claude-sonnet-5-5
+revcode --provider ollama --model qwen2.5-coder
+revcode --provider openai-compat --base-url http://localhost:8000/v1 --model my-model
+revcode -c                                # continue the latest session here
+```
+
+## Parallel Universes
+
+```bash
+revcode --universe          # or: "universe": true in .revcode/config.json
+```
+
+The agent gets a private copy of your project (tracked + untracked files; dependency dirs like `node_modules` are symlinked for speed). Every mutating tool call is checkpointed into a shadow git repo, so the whole run is a timeline you can navigate:
+
+| In a session | From the shell | What it does |
+| --- | --- | --- |
+| `/diff [full]` | `revcode universes diff <id>` | changeset vs. your project |
+| `/land [paths] [--markers\|--theirs]` | `revcode universes land <id>` | apply it, with a **3-way merge** if you edited the project meanwhile; real conflicts are never overwritten |
+| `/checkpoints`, `/rewind <n>` | `revcode universes show <id>` | jump files **and conversation** back to any step (undoable) |
+| `/fork [n]` | `revcode universes fork <id> [n]` | branch a sibling universe |
+| — | `revcode universes replay <id> --model X` | re-run the same prompts from the same starting point on another model |
+| — | `revcode universes compare <a> <b> --verify "pytest -q"` | side-by-side effort, file differences, and a real pass/fail |
+| — | `revcode universes share <id>` | self-contained HTML replay of the run |
+| `/discard` | `revcode universes discard <id>` | throw it away |
+
+Every turn ends with a **receipt**: commands run with exit codes, files actually changed, whether anything was verified *after* the last change, and warnings such as "modified an existing test file".
+
+Details, guarantees and limits: [docs/universes.md](docs/universes.md).
+
+## Dyno
+
+```bash
+revcode tune --model glm-5.2 --dry-run     # see the plan, spend nothing
+revcode tune --model glm-5.2 --budget 150  # run it; saves ~/.revcode/profiles/zai__glm-5.2.json
+revcode profile show                       # what's active, and the evidence
+```
+
+Harness choices (edit tool format, prompt style, tool-schema style, parallel tool calls, verification gates, temperature) can move a benchmark score by 10+ points on the *same* model. Dyno turns those into a search: baseline → one change at a time on the tasks that failed → **confirm against a fresh baseline** (so a lucky re-run can't masquerade as a gain). If nothing reliably helps it says so and keeps the defaults. Tuned profiles load automatically for that model. Details: [docs/dyno.md](docs/dyno.md).
+
+## Safety & permissions
+
+Modes: `ask` (default interactive), `accept-edits`, `plan` (read-only), `yolo` (default for headless runs and inside Universes). `--allow "shell(git status*)"` / `--deny "shell(git push*)"` rules; deny always wins. A short list of catastrophic commands (`rm -rf /`, `mkfs`, `dd` to a disk, fork bombs) is refused in **every** mode. Project hooks and MCP servers run commands, so they only load for directories you've trusted.
 
 ## Tools
 
-- `read_file`, `write_file`, `edit_file`, `delete_file`
-- `shell` — persistent session; `background: true` for long-running processes
-- `list_directory`, `grep`, `glob`
-- `update_plan` — maintain an ordered checklist for multi-step tasks
+`read_file`, `write_file`, `edit_file` (fuzzy-tolerant, atomic, with closest-match hints), `apply_patch`, `edit_anchored` (selectable per profile), `delete_file`, `list_directory`, `grep`, `glob`, `shell` (persistent bash; stdin closed; `background: true` for servers; long output spilled to a file), `update_plan`, `task` (read-only research subagent), `use_skill`, and any MCP tools. Read-only calls in one turn run in parallel.
 
-Read-only tools (`read_file`, `grep`, `glob`, `list_directory`) issued together in one turn run concurrently; mutating tools run sequentially.
+## Extending
 
-### Interactive commands
+- **Project instructions:** `AGENTS.md` (or `CLAUDE.md`) from the git root down to the working directory, plus `~/.revcode/AGENTS.md`.
+- **Config:** `~/.revcode/config.json`, `.revcode/config.json`, `.revcode/config.local.json` (CLI flags win).
+- **MCP:** `.mcp.json` / `.revcode/mcp.json` (stdio, Streamable HTTP, legacy SSE).
+- **Skills:** `SKILL.md` in `.revcode/skills`, `.claude/skills`, `.agents/skills`.
+- **Slash commands:** markdown in `.revcode/commands/`.
+- **Hooks:** `.revcode/hooks.json` — `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, `Stop`, `SessionStart`.
 
-`/help`, `/model`, `/tools`, `/memory`, `/tokens` (context usage), `/compact` (reclaim context), `/clear`, `/exit`.
+## Project structure
 
-## Headless mode
-
-```bash
-npm run build
-node dist/index.js --headless --prompt "Summarize README.md" --cwd .
 ```
-
-## Terminal Bench
-
-See [`eval/README.md`](eval/README.md) for Harbor setup and benchmark commands.
+src/
+├── agent/      engine (loop), runtime assembly, permissions, sessions, summarization, subagents
+├── harness/    profile (Dyno's knobs), prompt builder, gates, time budget, env snapshot
+├── llm/        providers (OpenAI-compatible, Anthropic), SSE, retry
+├── tools/      file tools, shell session, edit modes, apply-patch, anchored edits
+├── universe/   Parallel Universes: snapshots, land/merge, receipts, replay, compare, export
+├── dyno/       task suite, runner, tuner, report
+├── mcp/ skills/ hooks/ config/ commands/ tui/
+eval/           Harbor adapter for Terminal-Bench
+docs/           universes, dyno, terminal-bench, memory design
+```
 
 ## Scripts
 
-| Command          | Description                              |
-| ---------------- | ---------------------------------------- |
-| `npm run build`  | Compile TypeScript                       |
-| `npm run bundle` | Bundle to a single `dist/revcode.mjs`    |
-| `npm run dev`    | Run in dev mode (tsx)                    |
-| `npm run lint`   | Lint source                              |
-| `npm test`       | Run tests                                |
+`npm run build` · `npm run bundle` · `npm run dev` · `npm run lint` · `npm test`
 
-## Known limitations
+## Attribution
 
-- **Background processes intentionally survive agent exit.** Anything you start
-  with `background: true` (or an inline `&`/`nohup`) is meant to keep running
-  ("start the server and keep it running"), so on shutdown RevCode lets bash
-  exit cleanly rather than killing its process group. Under Harbor/eval the
-  container teardown reaps these; for long-lived interactive use outside a
-  disposable container, stop them yourself (the tool reports each background
-  pid and log file).
-- `shell` merges stdout and stderr into a single ordered stream.
+Some techniques and code are adapted from open-source harnesses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 

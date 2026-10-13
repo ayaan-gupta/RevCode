@@ -265,7 +265,7 @@ describe("loadMcpConfig", () => {
   it("reads timeouts and strips a UTF-8 BOM", async () => {
     await writeJson(
       path.join(project, ".mcp.json"),
-      `﻿${JSON.stringify({ mcpServers: { s: { command: "x", timeoutMs: 1234, startupTimeoutMs: 99 } } })}`,
+      `${String.fromCharCode(0xfeff)}${JSON.stringify({ mcpServers: { s: { command: "x", timeoutMs: 1234, startupTimeoutMs: 99 } } })}`,
     );
     const { servers, warnings } = await loadMcpConfig(project, { env: baseEnv() });
     expect(warnings).toEqual([]);

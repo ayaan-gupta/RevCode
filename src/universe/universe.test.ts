@@ -149,6 +149,21 @@ describe("checkpoints, rewind, fork", () => {
     expect((await child.changedFiles()).sort()).toEqual(["child-only.txt", "one.txt"]);
   });
 
+  it("carries only the lineage up to the fork point into the child's timeline", async () => {
+    const u = await Universe.create({ projectRoot: project });
+    u.recordPrompt(1, "first task");
+    write(path.join(u.workDir, "one.txt"), "1");
+    const cp = await u.checkpoint({ kind: "tool", tool: "write_file", summary: "one" });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    u.recordPrompt(2, "second task");
+    write(path.join(u.workDir, "two.txt"), "2");
+    await u.checkpoint({ kind: "tool", tool: "write_file", summary: "two" });
+
+    const child = await u.fork(cp.n);
+    expect(child.prompts().map((p) => p.text)).toEqual(["first task"]);
+    expect(child.checkpoints().map((c) => c.summary)).not.toContain("two");
+  });
+
   it("reports diff stats against the base", async () => {
     const u = await Universe.create({ projectRoot: project });
     write(path.join(u.workDir, "src/a.ts"), "export const a = 1;\nexport const b = 20;\nexport const c = 3;\nexport const d = 4;\n");

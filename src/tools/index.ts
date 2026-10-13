@@ -28,6 +28,7 @@ export class ToolRegistry {
   private readonly tools = new Map<string, RegisteredTool>();
   private readonly shellSession: ShellSession;
   private readonly planStore = new PlanStore();
+  private readonly extraReadOnly = new Set<string>();
   private readonly cwd: string;
   private readonly unrestricted: boolean;
   private profile: HarnessProfile;
@@ -121,7 +122,29 @@ export class ToolRegistry {
 
   /** True for tools that only read state and may run concurrently. */
   isReadOnly(name: string): boolean {
-    return READ_ONLY_TOOLS.has(name);
+    return READ_ONLY_TOOLS.has(name) || this.extraReadOnly.has(name);
+  }
+
+  /** Drop every tool not in `names` (used for read-only subagents). */
+  restrictTo(names: readonly string[]): void {
+    const keep = new Set(names);
+    for (const name of [...this.tools.keys()]) {
+      if (!keep.has(name)) {
+        this.tools.delete(name);
+      }
+    }
+  }
+
+  /** Mark additional tools (e.g. MCP tools annotated readOnlyHint) as safe to run concurrently. */
+  markReadOnly(names: Iterable<string>): void {
+    for (const name of names) {
+      this.extraReadOnly.add(name);
+    }
+  }
+
+  /** Interrupt a running foreground shell command (user pressed Ctrl-C). */
+  interruptShell(): void {
+    this.shellSession.interrupt();
   }
 
   /** Tear down the persistent shell session and its process group. */

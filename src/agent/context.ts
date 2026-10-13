@@ -95,11 +95,94 @@ export function forceCompact(
     return summarizeToolMessage(message, parsed, targetPath);
   });
 
+  const trimmed = trimOldPayloads(out, cutoff);
+  changed = changed || trimmed.changed;
   if (!changed) {
     return { messages, compacted: false, removedTokens: 0 };
   }
-  const after = estimateTokens(out);
-  return { messages: out, compacted: true, removedTokens: Math.max(0, before - after) };
+  const after = estimateTokens(trimmed.messages);
+  return { messages: trimmed.messages, compacted: true, removedTokens: Math.max(0, before - after) };
+}
+
+/** Large string arguments (whole files, patches) older than this are elided from history. */
+const OLD_ARG_LIMIT = 800;
+/** Old successful shell output longer than this keeps only its head and tail. */
+const OLD_SHELL_LIMIT = 1_600;
+const OLD_SHELL_KEEP = 600;
+
+/**
+ * Old file contents the model WROTE (tool-call arguments) and old shell output
+ * dominate long sessions. The files exist on disk and can be re-read, so history
+ * only needs a stub; failed commands keep their output because errors matter.
+ */
+function trimOldPayloads(messages: LlmMessage[], cutoff: number): { messages: LlmMessage[]; changed: boolean } {
+  let changed = false;
+  const out = messages.map((message, index) => {
+    if (index === 0 || index >= cutoff) {
+      return message;
+    }
+
+    if (message.role === "assistant" && message.toolCalls?.length) {
+      let touched = false;
+      const toolCalls = message.toolCalls.map((call) => {
+        const args = elideLargeStrings(call.arguments);
+        if (args !== call.arguments) touched = true;
+        return args === call.arguments ? call : { ...call, arguments: args };
+      });
+      if (touched) {
+        changed = true;
+        return { ...message, toolCalls };
+      }
+      return message;
+    }
+
+    if (message.role === "tool") {
+      const parsed = parseToolMessage(message);
+      if (parsed?.name !== "shell" || !parsed.result || typeof parsed.result !== "object") {
+        return message;
+      }
+      const result = parsed.result as Record<string, unknown>;
+      const stdout = typeof result.stdout === "string" ? result.stdout : "";
+      if (result.exitCode !== 0 || stdout.length <= OLD_SHELL_LIMIT) {
+        return message;
+      }
+      changed = true;
+      const omitted = stdout.length - 2 * OLD_SHELL_KEEP;
+      return {
+        ...message,
+        content: JSON.stringify({
+          toolCallId: parsed.toolCallId,
+          name: parsed.name,
+          result: {
+            ...result,
+            stdout: `${stdout.slice(0, OLD_SHELL_KEEP)}\n[… ${omitted} chars of older output elided …]\n${stdout.slice(-OLD_SHELL_KEEP)}`,
+          },
+        }),
+      };
+    }
+    return message;
+  });
+  return { messages: out, changed };
+}
+
+function elideLargeStrings(value: Record<string, unknown>): Record<string, unknown> {
+  let touched = false;
+  const walk = (node: unknown): unknown => {
+    if (typeof node === "string") {
+      if (node.length > OLD_ARG_LIMIT) {
+        touched = true;
+        return `${node.slice(0, 200)}\n[… ${node.length - 200} chars elided from earlier in the session; re-read the file if you need it …]`;
+      }
+      return node;
+    }
+    if (Array.isArray(node)) return node.map(walk);
+    if (node && typeof node === "object") {
+      return Object.fromEntries(Object.entries(node as Record<string, unknown>).map(([k, v]) => [k, walk(v)]));
+    }
+    return node;
+  };
+  const next = walk(value) as Record<string, unknown>;
+  return touched ? next : value;
 }
 
 // --- internals -------------------------------------------------------------

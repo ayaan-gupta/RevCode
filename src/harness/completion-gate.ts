@@ -21,28 +21,38 @@ export interface CompletionGate {
   setTask(task: string): void;
 }
 
-export function createCompletionGate(initialTask: string, maxChallenges = 2): CompletionGate {
+/**
+ * @param isReadOnly tools that cannot change anything; a turn that only used
+ *   those (a question, an exploration) has nothing to audit and is never challenged.
+ */
+export function createCompletionGate(
+  initialTask: string,
+  maxChallenges = 2,
+  isReadOnly: (toolName: string) => boolean = () => false,
+): CompletionGate {
   let task = initialTask;
   let challenges = 0;
-  let activitySinceChallenge = true;
+  let activitySinceChallenge = false;
 
   return {
     setTask(next: string) {
       task = next;
       challenges = 0;
-      activitySinceChallenge = true;
+      activitySinceChallenge = false;
     },
     middleware: {
       name: "completion-activity",
-      after() {
-        activitySinceChallenge = true;
+      after({ call }) {
+        if (!isReadOnly(call.name)) {
+          activitySinceChallenge = true;
+        }
         return undefined;
       },
     },
     gate: {
       name: "completion-gate",
-      check({ turnToolCalls }) {
-        if (turnToolCalls === 0 || challenges >= maxChallenges || !activitySinceChallenge) {
+      check() {
+        if (challenges >= maxChallenges || !activitySinceChallenge) {
           return undefined;
         }
         challenges += 1;

@@ -1,6 +1,6 @@
 {
   "name": "revcode",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "AI-powered coding agent for the terminal",
   "main": "dist/index.js",
   "bin": {

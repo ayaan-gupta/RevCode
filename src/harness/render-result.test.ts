@@ -49,6 +49,12 @@ describe("renderToolResult", () => {
     expect(renderToolResult("delete_file", { path: "x" })).toBe("Deleted x");
   });
 
+  it("renders MCP text results as real text, with structured data appended", () => {
+    expect(renderToolResult("mcp__fs__read", { text: "line1\nline2" })).toBe("line1\nline2");
+    expect(renderToolResult("mcp__x__y", { text: "ok", structured: { n: 1 } })).toBe('ok\n\n{\n  "n": 1\n}');
+    expect(renderToolResult("mcp__x__y", { structured: [1, 2] })).toBe("[\n  1,\n  2\n]");
+  });
+
   it("falls back to compact JSON for unknown tools", () => {
     expect(renderToolResult("mcp__x__y", { a: 1 })).toBe('{\n  "a": 1\n}');
     expect(renderToolResult("mcp__x__y", { harnessNote: "n" })).toBe("(ok)\n[harness: n]");

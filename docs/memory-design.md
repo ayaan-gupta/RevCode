@@ -1,5 +1,7 @@
 # RevCode Memory Management Design
 
+> **Status update:** Phases 1–3 are implemented differently than first sketched: token estimation + rule-based compaction (`src/agent/context.ts`, now also eliding old file contents and shell output), an LLM handoff summary and context-overflow recovery (`src/agent/summarize.ts`), and per-turn receipts/timelines for Parallel Universes (`src/universe/`). Vector retrieval / knowledge graph (Phase 4) remains future work.
+
 This document describes the planned memory system for RevCode: sliding context, importance ranking, compaction, and retrieval. Implementation is a follow-up milestone; this spec defines integration points with the existing agent loop in `src/agent/agent.ts` and trajectory JSONL format.
 
 ## Goals

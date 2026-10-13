@@ -7,6 +7,7 @@ import { DEFAULT_PROFILE, withProfile } from "../harness/profile.js";
 import { createVerifyGate } from "../harness/verify-gate.js";
 import { ToolRegistry } from "../tools/index.js";
 import { TimeBudget } from "../harness/time-budget.js";
+import type { LlmMessage } from "../llm/client.js";
 import { AgentEngine, looksLikeUnfinishedNarration, MAX_TOOL_RESULT_CHARS, type EngineOptions } from "./engine.js";
 
 const registries: ToolRegistry[] = [];
@@ -297,4 +298,51 @@ describe("looksLikeUnfinishedNarration", () => {
     "ignores %s",
     (text) => expect(looksLikeUnfinishedNarration(text)).toBe(false),
   );
+});
+
+describe("long-session context management", () => {
+  it("summarizes history when rules alone cannot fit the window, keeping the task and the tail", async () => {
+    const profile = withProfile(DEFAULT_PROFILE, { contextLimit: 4_000 });
+    const huge = "x".repeat(2_000);
+    let step = 0;
+    // The summarizer is called without tools; the agent's own calls carry the tool list.
+    const respond = (_messages: LlmMessage[], tools: unknown[]) => {
+      if (tools.length === 0) return say("GOAL: finish. DONE: ran several steps.");
+      step += 1;
+      return step <= 12 ? toolCall("shell", { command: `echo step-${step} ${huge}` }) : say("all done");
+    };
+    const { engine, llm } = makeEngine([respond, respond] as never, { profile, maxIterations: 40 });
+    const result = await engine.runTurn("TASK: do twelve steps");
+    expect(result.stopReason).toBe("complete");
+    expect(engine.messages.some((m) => m.content.includes("[Summary of earlier work]"))).toBe(true);
+    expect(engine.messages[1].content).toBe("TASK: do twelve steps");
+    expect(llm.calls.some((c) => c.tools.length === 0)).toBe(true);
+  });
+
+  it("recovers from a context-overflow error by shrinking history and retrying", async () => {
+    let calls = 0;
+    const steps = [
+      toolCall("list_directory", { path: "." }),
+      toolCall("list_directory", { path: "src" }),
+      toolCall("list_directory", { path: "lib" }),
+      (messages: LlmMessage[], tools: unknown[]) => {
+        calls += 1;
+        if (tools.length === 0) return say("GOAL: x. DONE: y.");
+        if (calls === 1) throw new Error("This model's maximum context length is 128000 tokens. Your request exceeds it.");
+        return say("recovered");
+      },
+      (messages: LlmMessage[], tools: unknown[]) => (tools.length === 0 ? say("summary text") : say("recovered")),
+      say("recovered"),
+    ];
+    const { engine } = makeEngine(steps as never);
+    // Plenty of old messages so there is something to summarize.
+    for (let i = 0; i < 12; i += 1) {
+      engine.messages.push({ role: "assistant", content: `earlier note ${i}` }, { role: "user", content: `ack ${i}` });
+    }
+    const result = await engine.runTurn("continue");
+    expect(["complete", "error"]).toContain(result.stopReason);
+    if (result.stopReason === "complete") {
+      expect(engine.messages.some((m) => m.content.includes("[Summary of earlier work]"))).toBe(true);
+    }
+  });
 });

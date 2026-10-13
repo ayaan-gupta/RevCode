@@ -2,19 +2,58 @@
 /**
  * RevCode — AI-powered coding agent for the terminal.
  *
- * Entry point. Parses CLI args and starts the agent loop.
+ * Entry point: parses the command line, layers config files beneath it, and
+ * dispatches to the interactive/headless agent or a subcommand.
  */
 
-import { parseArgs } from "./cli.js";
 import { Agent } from "./agent/agent.js";
+import { HELP_TEXT, parseCommandLine, resolveArgs, type CliArgs } from "./cli.js";
+import { runUniversesCommand } from "./commands/universes.js";
+import { runProfileCommand, runSessionsCommand } from "./commands/misc.js";
+import { loadConfig } from "./config/config.js";
+import { VERSION } from "./version.js";
 
-async function main() {
-  const args = parseArgs(process.argv.slice(2));
-  const agent = new Agent(args);
-  await agent.start();
+function withConfig(args: CliArgs): CliArgs {
+  const loaded = loadConfig(args.cwd);
+  for (const warning of loaded.warnings) {
+    process.stderr.write(`[revcode] config: ${warning}\n`);
+  }
+  return resolveArgs(args, loaded);
+}
+
+async function main(): Promise<void> {
+  const command = parseCommandLine(process.argv.slice(2));
+
+  switch (command.kind) {
+    case "help":
+      console.log(HELP_TEXT);
+      return;
+    case "version":
+      console.log(`revcode ${VERSION}`);
+      return;
+    case "sessions":
+      process.exitCode = runSessionsCommand(withConfig(command.args));
+      return;
+    case "profile":
+      process.exitCode = runProfileCommand(withConfig(command.args), command.action);
+      return;
+    case "universes":
+      process.exitCode = await runUniversesCommand(withConfig(command.args), command.action, command.rest);
+      return;
+    case "tune": {
+      const { runTuneCommand } = await import("./commands/tune.js");
+      process.exitCode = await runTuneCommand(withConfig(command.args), command.options);
+      return;
+    }
+    case "run": {
+      const agent = new Agent(withConfig(command.args));
+      await agent.start();
+      return;
+    }
+  }
 }
 
 main().catch((err) => {
-  console.error("RevCode failed:", err);
+  console.error("RevCode failed:", err instanceof Error ? err.message : err);
   process.exit(1);
 });

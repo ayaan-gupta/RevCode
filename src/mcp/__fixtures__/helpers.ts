@@ -44,3 +44,13 @@ export function isAlive(pid: number): boolean {
     return false;
   }
 }
+
+/** Await a promise that must reject and return the error. */
+export async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error("expected the promise to reject");
+}

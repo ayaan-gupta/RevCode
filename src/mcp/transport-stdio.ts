@@ -169,6 +169,11 @@ export class StdioTransport implements McpTransport {
 
   send(message: JsonRpcMessage): Promise<void> {
     const child = this.child;
+    if (this.exited && !this.finished && !this.closing) {
+      // The process is gone but its stderr may still be in the pipe. Wait for
+      // the drain so the error carries the complete tail, not a prefix of it.
+      return this.finishedPromise.then(() => Promise.reject(this.unavailableError()));
+    }
     if (!child || this.closing || this.exited || child.stdin.destroyed || !child.stdin.writable) {
       return Promise.reject(this.unavailableError());
     }
@@ -271,7 +276,11 @@ export class StdioTransport implements McpTransport {
     for (const item of Array.isArray(parsed) ? parsed : [parsed]) {
       const message = parseJsonRpcMessage(item);
       if (message) {
-        this.onmessage?.(message);
+        try {
+          this.onmessage?.(message);
+        } catch (error) {
+          this.diagnose(`message handler threw: ${error instanceof Error ? error.message : String(error)}`);
+        }
       } else {
         this.diagnose(`ignoring non-JSON-RPC message: ${truncateForLog(line)}`);
       }

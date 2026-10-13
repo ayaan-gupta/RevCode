@@ -20,6 +20,7 @@ import type { HarnessProfile } from "../harness/profile.js";
 import type { TimeBudget } from "../harness/time-budget.js";
 import type { ToolRegistry } from "../tools/index.js";
 import { estimateTokens, forceCompact, maybeCompact, type CompactionResult } from "./context.js";
+import { isContextOverflowError, summarizeHistory } from "./summarize.js";
 
 // --- public types -----------------------------------------------------------
 
@@ -147,6 +148,8 @@ export class AgentEngine {
   private readonly finalGates: FinalGate[];
   private readonly timeBudget?: TimeBudget;
   private recentSignatures: string[] = [];
+  /** Conversation length right after the last LLM summary (avoids summarizing in a loop). */
+  private summarizedAt = -100;
 
   constructor(options: EngineOptions) {
     this.llm = options.llm;
@@ -230,6 +233,7 @@ export class AgentEngine {
     let finalContent = "";
     let stallNudges = 0;
     let narrationNudges = 0;
+    let overflowRetries = 0;
     let stopReason: StopReason = "max_iterations";
     let errorMessage: string | undefined;
 
@@ -254,7 +258,7 @@ export class AgentEngine {
           this.pushHarnessMessage(budget.nudge);
         }
 
-        this.compactIfNeeded();
+        await this.compactIfNeeded(signal);
         this.observer.llmStart?.();
 
         let streamed = false;
@@ -281,8 +285,17 @@ export class AgentEngine {
             stopReason = "aborted";
             break;
           }
+          const message = error instanceof Error ? error.message : String(error);
+          // The provider says the prompt is too long: shrink the history and retry this step.
+          if (isContextOverflowError(message) && overflowRetries < 2) {
+            overflowRetries += 1;
+            if (await this.shrinkHistory(signal)) {
+              iterations -= 1;
+              continue;
+            }
+          }
           stopReason = "error";
-          errorMessage = error instanceof Error ? error.message : String(error);
+          errorMessage = message;
           break;
         }
 
@@ -405,17 +418,58 @@ export class AgentEngine {
     this.record({ type: "user", content });
   }
 
-  private compactIfNeeded(): void {
+  private async compactIfNeeded(signal?: AbortSignal): Promise<void> {
     const result = maybeCompact(this.messages, {
       tokenLimit: this.profile.contextLimit,
       triggerRatio: this.profile.compactTrigger,
     });
-    if (!result.compacted) {
-      return;
+    if (result.compacted) {
+      this.messages.splice(0, this.messages.length, ...result.messages);
+      this.record({ type: "system", content: `[compaction] reclaimed ~${result.removedTokens} tokens` });
+      this.observer.compaction?.(result.removedTokens);
     }
-    this.messages.splice(0, this.messages.length, ...result.messages);
-    this.record({ type: "system", content: `[compaction] reclaimed ~${result.removedTokens} tokens` });
-    this.observer.compaction?.(result.removedTokens);
+
+    // Cheap rules weren't enough: write a handoff summary of the older work.
+    if (
+      estimateTokens(this.messages) > this.profile.contextLimit * 0.85 &&
+      this.messages.length > this.summarizedAt + 6
+    ) {
+      await this.summarizeNow(signal);
+    }
+  }
+
+  /** Replace older history with an LLM-written handoff summary. */
+  private async summarizeNow(signal?: AbortSignal): Promise<boolean> {
+    try {
+      const summary = await summarizeHistory(this.llm, this.messages, { signal });
+      if (!summary) {
+        return false;
+      }
+      this.messages.splice(0, this.messages.length, ...summary.messages);
+      this.summarizedAt = this.messages.length;
+      this.record({ type: "system", content: `[summary] earlier work condensed (~${Math.round(summary.removedChars / 4)} tokens reclaimed)` });
+      this.observer.notice?.("Condensed earlier work into a summary to stay within the context window.");
+      return true;
+    } catch (error) {
+      if (!signal?.aborted) {
+        this.observer.notice?.(`Could not summarize history: ${error instanceof Error ? error.message : String(error)}`);
+      }
+      return false;
+    }
+  }
+
+  /** Emergency shrink after a context-overflow error: summary first, tighter rules as a fallback. */
+  private async shrinkHistory(signal?: AbortSignal): Promise<boolean> {
+    if (await this.summarizeNow(signal)) {
+      return true;
+    }
+    const forced = forceCompact(this.messages, { tokenLimit: this.profile.contextLimit, keepLastN: 6 });
+    if (forced.compacted) {
+      this.messages.splice(0, this.messages.length, ...forced.messages);
+      this.observer.compaction?.(forced.removedTokens);
+      return true;
+    }
+    return false;
   }
 
   /**
