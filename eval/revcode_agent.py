@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import tempfile
 from pathlib import Path
 
 from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
@@ -68,6 +69,10 @@ class RevCodeAgent(BaseInstalledAgent):
     TRAJECTORY_PATH = "/tmp/revcode-trajectory.jsonl"
     BUNDLE_REMOTE_PATH = "/opt/revcode/revcode.mjs"
     PROFILE_REMOTE_PATH = "/opt/revcode/profile.json"
+    PROMPT_REMOTE_PATH = "/opt/revcode/prompt.txt"
+    # A renamed copy of the node binary: a model that runs `pkill node` / `killall node` (or
+    # `pkill -f` on a word from the task) must not be able to kill the agent that runs it.
+    RUNTIME_REMOTE_PATH = "/opt/revcode/revcode-rt"
     # Overridable from the host environment so the same adapter can benchmark any
     # provider/model, optionally with a Dyno-tuned profile (`revcode tune`).
     MODEL = os.environ.get("REVCODE_EVAL_MODEL", "glm-5.2")
@@ -138,7 +143,8 @@ class RevCodeAgent(BaseInstalledAgent):
                 f"{update_ca}"
                 f"&& curl -fsSL https://deb.nodesource.com/setup_{self.NODE_MAJOR}.x | bash - "
                 "&& apt-get install -y -o Acquire::Retries=3 nodejs "
-                "&& mkdir -p /opt/revcode"
+                "&& mkdir -p /opt/revcode "
+                f'&& cp "$(command -v node)" {self.RUNTIME_REMOTE_PATH}'
             ),
         )
 
@@ -178,7 +184,14 @@ class RevCodeAgent(BaseInstalledAgent):
         except Exception:
             pass
 
-        quoted_instruction = shlex.quote(instruction)
+        # The task goes in a file, not on the command line (see RUNTIME_REMOTE_PATH).
+        with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+            fh.write(instruction)
+            local_prompt = fh.name
+        try:
+            await environment.upload_file(local_prompt, self.PROMPT_REMOTE_PATH)
+        finally:
+            os.unlink(local_prompt)
         quoted_trajectory = shlex.quote(self.TRAJECTORY_PATH)
         profile_flag = (
             f"--profile {self.PROFILE_REMOTE_PATH} "
@@ -188,8 +201,8 @@ class RevCodeAgent(BaseInstalledAgent):
         # Hermetic by design: never read project instructions, hooks or MCP config from
         # the task directory, so results depend only on the model and the harness.
         command = (
-            f"node {self.BUNDLE_REMOTE_PATH} --headless "
-            f"--prompt {quoted_instruction} "
+            f"{self.RUNTIME_REMOTE_PATH} {self.BUNDLE_REMOTE_PATH} --headless "
+            f"--prompt-file {self.PROMPT_REMOTE_PATH} "
             f"--trajectory-out {quoted_trajectory} "
             f"--cwd {shlex.quote(workdir)} "
             f"--provider {self.PROVIDER} "
