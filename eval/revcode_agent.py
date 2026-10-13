@@ -74,6 +74,7 @@ class RevCodeAgent(BaseInstalledAgent):
     PROVIDER = os.environ.get("REVCODE_EVAL_PROVIDER", "zai")
     # Iterations are a safety net, not the limit: the wall-clock budget is.
     MAX_ITERATIONS = int(os.environ.get("REVCODE_EVAL_MAX_ITERATIONS", "300"))
+    NODE_MAJOR = os.environ.get("REVCODE_EVAL_NODE_MAJOR", "22")
 
     @staticmethod
     def name() -> str:
@@ -83,12 +84,34 @@ class RevCodeAgent(BaseInstalledAgent):
         return "0.1.0"
 
     async def install(self, environment: BaseEnvironment) -> None:
+        # Optional: containers that reach the network only through a TLS-intercepting egress
+        # proxy (REVCODE_EVAL_CA_BUNDLE = host path of that proxy's CA). Trust the CA for apt
+        # (verification stays ON) and switch apt mirrors to https, since such proxies tunnel
+        # only CONNECT. Not set in normal runs, which then behave exactly as before.
+        ca_bundle = os.environ.get("REVCODE_EVAL_CA_BUNDLE")
+        self._egress_ca = bool(ca_bundle and Path(ca_bundle).expanduser().exists())
+        if self._egress_ca:
+            await environment.upload_file(str(Path(ca_bundle).expanduser()), "/tmp/egress-ca.crt")
+            await self.exec_as_root(
+                environment,
+                command=(
+                    "mkdir -p /opt/revcode /usr/local/share/ca-certificates "
+                    "&& cp /tmp/egress-ca.crt /opt/revcode/ca.crt "
+                    "&& cp /tmp/egress-ca.crt /usr/local/share/ca-certificates/egress-proxy.crt "
+                    "&& printf 'Acquire::https::CaInfo \"/opt/revcode/ca.crt\";\\n' > /etc/apt/apt.conf.d/99egress-ca "
+                    "&& (sed -i 's|http://|https://|g' /etc/apt/sources.list /etc/apt/sources.list.d/* 2>/dev/null || true)"
+                ),
+            )
+
         # Node + ripgrep + tmux (the interactive `terminal` tool registers only when tmux exists) — no npm install/build inside the container.
+        # Node 22: its fetch can honor HTTPS_PROXY (NODE_USE_ENV_PROXY), which RevCode enables itself.
+        update_ca = "&& update-ca-certificates " if self._egress_ca else ""
         await self.exec_as_root(
             environment,
             command=(
                 "apt-get update && apt-get install -y curl ca-certificates gnupg ripgrep tmux "
-                "&& curl -fsSL https://deb.nodesource.com/setup_20.x | bash - "
+                f"{update_ca}"
+                f"&& curl -fsSL https://deb.nodesource.com/setup_{self.NODE_MAJOR}.x | bash - "
                 "&& apt-get install -y nodejs "
                 "&& mkdir -p /opt/revcode"
             ),
@@ -134,6 +157,15 @@ class RevCodeAgent(BaseInstalledAgent):
             "--no-instructions --no-hooks --no-mcp"
         )
         api_env = _resolve_api_env(Path(__file__).resolve().parents[1])
+        if getattr(self, "_egress_ca", False):
+            # Node ignores the system trust store; shell tools use the merged system bundle.
+            bundle = "/etc/ssl/certs/ca-certificates.crt"
+            api_env.update(
+                NODE_EXTRA_CA_CERTS="/opt/revcode/ca.crt",
+                SSL_CERT_FILE=bundle,
+                REQUESTS_CA_BUNDLE=bundle,
+                CURL_CA_BUNDLE=bundle,
+            )
         await self.exec_as_agent(environment, command=command, env=api_env)
 
         local_trajectory = Path("/tmp/revcode-trajectory-host.jsonl")
