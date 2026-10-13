@@ -7,6 +7,7 @@
  */
 
 import { Agent } from "./agent/agent.js";
+import { workingDirectoryProblem } from "./agent/cwd.js";
 import { HELP_TEXT, parseCommandLine, resolveArgs, type CliArgs } from "./cli.js";
 import { runUniversesCommand } from "./commands/universes.js";
 import { runProfileCommand, runSessionsCommand } from "./commands/misc.js";
@@ -47,7 +48,14 @@ async function main(): Promise<void> {
       return;
     }
     case "run": {
-      const agent = new Agent(withConfig(command.args));
+      const args = withConfig(command.args);
+      const cwdProblem = workingDirectoryProblem(args.cwd);
+      if (cwdProblem) {
+        console.error(`[revcode] ${cwdProblem}`);
+        process.exitCode = 2;
+        return;
+      }
+      const agent = new Agent(args);
       await agent.start();
       return;
     }

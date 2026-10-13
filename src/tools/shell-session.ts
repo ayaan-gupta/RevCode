@@ -25,7 +25,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -59,6 +59,8 @@ export interface ShellRunResult {
   background?: { pid: number | null; logFile: string };
   /** Human-oriented note (e.g. timeout/reset guidance for the model). */
   note?: string;
+  /** Set when the shell could not run at all (e.g. its working directory does not exist). */
+  error?: string;
 }
 
 export interface ShellSessionOptions {
@@ -77,6 +79,7 @@ export class ShellSession {
   private queue: Promise<unknown> = Promise.resolve();
   private disposed = false;
   private childExited = false;
+  private spawnError: string | undefined;
   private lastExitCode: number | null = null;
 
   constructor(options: ShellSessionOptions) {
@@ -196,7 +199,12 @@ export class ShellSession {
       // The shell itself ended (the command ran `exit`, or it crashed).
       const code = this.lastExitCode;
       const out = this.collapseOutput(stripSentinel(this.outBuf, marker));
+      const spawnError = this.spawnError;
+      this.spawnError = undefined;
       this.hardRestart();
+      if (spawnError) {
+        return { stdout: out, exitCode: code ?? 1, error: spawnError };
+      }
       return {
         stdout: out,
         exitCode: code ?? 1,
@@ -324,7 +332,12 @@ export class ShellSession {
       this.lastExitCode = code;
       this.notify();
     });
-    child.on("error", () => {
+    child.on("error", (error) => {
+      // Node reports a missing working directory as ENOENT on the *spawn*, which reads like a
+      // missing `bash`; say what is actually wrong so the model (and a human) can act on it.
+      this.spawnError = (error as NodeJS.ErrnoException).code === "ENOENT" && !existsSync(this.cwd)
+        ? `The shell could not start because its working directory does not exist: ${this.cwd}. Use absolute paths or create it.`
+        : error.message;
       this.childExited = true;
       this.notify();
     });

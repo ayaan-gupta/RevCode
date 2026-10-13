@@ -167,6 +167,17 @@ class RevCodeAgent(BaseInstalledAgent):
         environment: BaseEnvironment,
         context: AgentContext,
     ) -> None:
+        # Work where the task image says to: WORKDIR differs per task (/app, /app/subdir,
+        # /workspace, ...) and a hard-coded directory that does not exist breaks every shell call.
+        workdir = "/app"
+        try:
+            probe = await self.exec_as_agent(environment, command="pwd")
+            lines = (getattr(probe, "stdout", None) or "").strip().splitlines()
+            if lines and lines[-1].startswith("/"):
+                workdir = lines[-1].strip()
+        except Exception:
+            pass
+
         quoted_instruction = shlex.quote(instruction)
         quoted_trajectory = shlex.quote(self.TRAJECTORY_PATH)
         profile_flag = (
@@ -180,7 +191,7 @@ class RevCodeAgent(BaseInstalledAgent):
             f"node {self.BUNDLE_REMOTE_PATH} --headless "
             f"--prompt {quoted_instruction} "
             f"--trajectory-out {quoted_trajectory} "
-            "--cwd /app "
+            f"--cwd {shlex.quote(workdir)} "
             f"--provider {self.PROVIDER} "
             f"--model {self.MODEL} "
             f"--max-iterations {self.MAX_ITERATIONS} "

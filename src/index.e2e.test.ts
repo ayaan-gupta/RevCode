@@ -56,6 +56,16 @@ describe("revcode CLI (end to end)", () => {
     expect(summary).toMatchObject({ stopReason: "complete", toolCalls: 1, model: "test" });
   });
 
+  it("refuses a working directory that does not exist", () => {
+    const result = revcode(
+      ["run", "--provider", "local-test", "--model", "test", "--cwd", "/definitely/not/a/real/dir", "hi"],
+      dir,
+      home,
+    );
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("--cwd does not exist");
+  });
+
   it("rejects bad flags with a clear error and non-zero exit", () => {
     const result = revcode(["--bogus"], dir, home);
     expect(result.status).toBe(1);

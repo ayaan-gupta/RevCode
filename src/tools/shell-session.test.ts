@@ -13,6 +13,14 @@ describe("ShellSession", () => {
     session = undefined;
   });
 
+  it("explains a missing working directory instead of reporting a mysterious crash", async () => {
+    session = new ShellSession({ cwd: "/definitely/not/a/real/dir" });
+    const result = await session.run("echo hi");
+    expect(result.error).toContain("working directory does not exist");
+    expect(result.error).toContain("/definitely/not/a/real/dir");
+    expect(result.sessionReset).toBeUndefined();
+  });
+
   it("persists cwd across calls", async () => {
     session = makeSession();
     await session.run("mkdir -p /tmp/revcode-test-state && cd /tmp/revcode-test-state");
