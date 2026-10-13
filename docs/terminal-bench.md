@@ -38,11 +38,45 @@ Seeded 16-task sample (`random.Random(0)` over tasks with a 900 s limit, excludi
 
 Caveats: n = 16 with one trial each. The step from 9 to 13 is 4 tasks gained and none lost (exact sign test p ≈ 0.13), and thinking on vs off differs by one task, which is noise. What *is* clear is speed: thinking off finished the sample in 22 min vs 40 min. Run-to-run variance on single tasks is real (several tasks flip between runs).
 
+## Full Terminal-Bench 2 run (GLM-5.2, thinking off)
+
+One trial per task, every task whose time limit is at most one hour (87 of 89; `sam-cell-seg` at 2 h and
+`build-pov-ray` at 3.3 h were not run). The agent's time budget was set per task from its limit; model
+`glm-5.2` via Z.ai (the API reports serving `glm-5.3` variants), thinking off, no tuned profile, no per-task
+hacks, no `AGENTS.md`/hooks/MCP.
+
+| Result | Tasks |
+| --- | --- |
+| **Passed** | **54 / 87 (62.1%)** — 54 / 89 (60.7%) if the two unrun tasks are counted as failures |
+| Wrong result | 22 |
+| Out of time | 10 |
+| Verifier hung (`torch-tensor-parallelism`, counted as a failure) | 1 |
+
+By task time limit: 15 min 35/49, 20 min 4/6, 30 min 7/16, 40 min 1/2, 60 min 5/12. Short tasks go well; the
+long, compute-heavy ones (path tracing, MIPS, cryptanalysis, installing Windows 3.11 in QEMU) mostly run out of
+time or miss a hidden requirement.
+
+**How much to trust this number.** One trial per task: the standard error is about 5 points, and individual
+tasks flip between runs (`fix-git`, `headless-terminal` and `crack-7z-hash` each passed in earlier runs and
+failed here). Running through a proxy-fronted sandbox also cost some trials (below). Treat it as "roughly
+60%", not a leaderboard-grade measurement. I did not compare against other agents on this setup.
+
+Problems the full run exposed, and what was done:
+
+- A task image with a different `WORKDIR` made the shell unusable (fixed, above).
+- A full disk crashed Harbor mid-run; the invalid trials were re-run, not counted.
+- Four images with a very large layer failed to unpack under Docker's containerd snapshotter in the sandbox;
+  they passed to the point of running once switched to the `overlay2` driver (environment issue, not RevCode).
+- Two tasks ended with the model killing the agent by accident (`pkill -f <word from the task>`). The adapter now
+  passes the task via `--prompt-file` and runs RevCode under a renamed `node` binary.
+
 ## What is NOT known
 
-- A full-benchmark score is reported separately below if a full run has completed; do not extrapolate the sample to it.
-- Whether thinking-off is better on the long (30–60 min) tasks, where deliberate reasoning might matter more.
-- Whether `apply_patch` or hashline editing helps GLM; that is what `revcode tune` is for, but the built-in Dyno suite is too easy for GLM-5.2 (16/16 at baseline), so it has no headroom to tune on.
+- Whether thinking-off is better on the long (30–60 min) tasks: it was only A/B-tested on the 15-minute sample,
+  where it matched thinking-on at about half the wall-clock time.
+- Whether `apply_patch` or hashline editing helps GLM; that is what `revcode tune` is for, but the built-in Dyno
+  suite is too easy for GLM-5.2 (16/16 at baseline), so it has no headroom to tune on.
+- The score on the two multi-hour tasks, and run-to-run variance beyond the single repeat above.
 
 ## Running it
 
