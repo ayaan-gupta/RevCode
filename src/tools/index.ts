@@ -3,7 +3,6 @@
  */
 
 import { deleteFile, type DeleteToolInput } from "./delete.js";
-import { editFile, type EditToolInput } from "./edit.js";
 import { globFiles, type GlobToolInput } from "./glob.js";
 import { grepFiles, type GrepToolInput } from "./grep.js";
 import { listDirectory, type ListToolInput } from "./list.js";
@@ -12,6 +11,10 @@ import { ShellSession } from "./shell-session.js";
 import { PlanStore, updatePlan, type PlanStep, type UpdatePlanInput } from "./plan.js";
 import { readFile, type ReadToolInput } from "./read.js";
 import { writeFile, type WriteToolInput } from "./write.js";
+import { DEFAULT_PROFILE, type HarnessProfile } from "../harness/profile.js";
+import { applySchemaStyle } from "../harness/schema-style.js";
+import { normalizeToolArgs } from "./normalize-args.js";
+import { EDIT_TOOL_NAMES, editToolsForMode } from "./edit-modes.js";
 
 /** Tools that only read state and may run concurrently within a turn. */
 export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set([
@@ -25,21 +28,23 @@ export class ToolRegistry {
   private readonly tools = new Map<string, RegisteredTool>();
   private readonly shellSession: ShellSession;
   private readonly planStore = new PlanStore();
+  private readonly cwd: string;
+  private readonly unrestricted: boolean;
+  private profile: HarnessProfile;
 
   constructor(options: ToolRegistryOptions = {}) {
     const cwd = options.cwd ?? process.cwd();
+    this.cwd = cwd;
+    this.unrestricted = options.unrestrictedPaths ?? false;
+    this.profile = options.profile ?? DEFAULT_PROFILE;
     this.shellSession = new ShellSession({ cwd });
     this.register({
       definition: readToolDefinition,
-      handler: (input) => readFile(input as ReadToolInput, { cwd: options.cwd }),
+      handler: (input) => readFile(input as ReadToolInput, { cwd: this.cwd, unrestricted: this.unrestricted }),
     });
     this.register({
       definition: writeToolDefinition,
-      handler: (input) => writeFile(input as WriteToolInput, { cwd: options.cwd }),
-    });
-    this.register({
-      definition: editToolDefinition,
-      handler: (input) => editFile(input as EditToolInput, { cwd: options.cwd }),
+      handler: (input) => writeFile(input as WriteToolInput, { cwd: this.cwd, unrestricted: this.unrestricted }),
     });
     this.register({
       definition: shellToolDefinition,
@@ -47,24 +52,40 @@ export class ToolRegistry {
     });
     this.register({
       definition: listDirectoryToolDefinition,
-      handler: (input) => listDirectory(input as ListToolInput, { cwd: options.cwd }),
+      handler: (input) => listDirectory(input as ListToolInput, { cwd: this.cwd, unrestricted: this.unrestricted }),
     });
     this.register({
       definition: grepToolDefinition,
-      handler: (input) => grepFiles(input as GrepToolInput, { cwd: options.cwd }),
+      handler: (input) => grepFiles(input as GrepToolInput, { cwd: this.cwd, unrestricted: this.unrestricted }),
     });
     this.register({
       definition: globToolDefinition,
-      handler: (input) => globFiles(input as GlobToolInput, { cwd: options.cwd }),
+      handler: (input) => globFiles(input as GlobToolInput, { cwd: this.cwd, unrestricted: this.unrestricted }),
     });
     this.register({
       definition: deleteFileToolDefinition,
-      handler: (input) => deleteFile(input as DeleteToolInput, { cwd: options.cwd }),
+      handler: (input) => deleteFile(input as DeleteToolInput, { cwd: this.cwd, unrestricted: this.unrestricted }),
     });
     this.register({
       definition: updatePlanToolDefinition,
       handler: async (input) => updatePlan(input as UpdatePlanInput, this.planStore),
     });
+    this.applyEditMode();
+  }
+
+  /** Switch harness profile (edit tool set + schema presentation). */
+  setProfile(profile: HarnessProfile): void {
+    this.profile = profile;
+    this.applyEditMode();
+  }
+
+  private applyEditMode(): void {
+    for (const name of EDIT_TOOL_NAMES) {
+      this.tools.delete(name);
+    }
+    for (const tool of editToolsForMode(this.profile.editMode, { cwd: this.cwd, unrestricted: this.unrestricted })) {
+      this.register(tool);
+    }
   }
 
   /** Current plan steps (for rendering). */
@@ -79,12 +100,23 @@ export class ToolRegistry {
   async execute(name: string, input: unknown): Promise<unknown> {
     const tool = this.tools.get(name);
     if (!tool) throw new Error(`Unknown tool: ${name}`);
-    return tool.handler(input);
+
+    if (input === null || typeof input !== "object" || Array.isArray(input)) {
+      return tool.handler(input);
+    }
+    // Repair unambiguous argument mistakes (aliases, stringified arrays/numbers)
+    // instead of bouncing them back and burning a turn.
+    const { args, notes } = normalizeToolArgs(input as Record<string, unknown>, tool.definition.parameters);
+    const result = await tool.handler(args);
+    return notes.length > 0 ? annotate(result, `Arguments adjusted: ${notes.join("; ")}.`) : result;
   }
 
   /** Return tool definitions for the LLM's function-calling interface. */
   definitions(): ToolDefinition[] {
-    return Array.from(this.tools.values(), (tool) => tool.definition);
+    return applySchemaStyle(
+      Array.from(this.tools.values(), (tool) => tool.definition),
+      this.profile.toolSchema,
+    );
   }
 
   /** True for tools that only read state and may run concurrently. */
@@ -98,8 +130,19 @@ export class ToolRegistry {
   }
 }
 
+/** Attach a harness note to a tool result without changing its meaning. */
+function annotate(result: unknown, note: string): unknown {
+  if (result !== null && typeof result === "object" && !Array.isArray(result)) {
+    return { ...(result as Record<string, unknown>), harnessNote: note };
+  }
+  return { output: result, harnessNote: note };
+}
+
 export interface ToolRegistryOptions {
   cwd?: string;
+  profile?: HarnessProfile;
+  /** Let file tools touch paths outside cwd (headless / yolo / universes). */
+  unrestrictedPaths?: boolean;
 }
 
 export interface RegisteredTool {
@@ -165,47 +208,10 @@ const writeToolDefinition: ToolDefinition = {
   },
 };
 
-const editToolDefinition: ToolDefinition = {
-  name: "edit_file",
-  description:
-    "Apply one or more exact text replacements to an existing UTF-8 file inside the working directory. Each oldText must match exactly once. Returns a unified diff.",
-  parameters: {
-    type: "object",
-    properties: {
-      path: {
-        type: "string",
-        description: "File path to edit, relative to the agent working directory.",
-      },
-      edits: {
-        type: "array",
-        minItems: 1,
-        description: "Ordered exact text replacements to apply.",
-        items: {
-          type: "object",
-          properties: {
-            oldText: {
-              type: "string",
-              description: "Existing text to replace. Must occur exactly once at edit time.",
-            },
-            newText: {
-              type: "string",
-              description: "Replacement text.",
-            },
-          },
-          required: ["oldText", "newText"],
-          additionalProperties: false,
-        },
-      },
-    },
-    required: ["path", "edits"],
-    additionalProperties: false,
-  },
-};
-
 const shellToolDefinition: ToolDefinition = {
   name: "shell",
   description:
-    "Execute a command in a PERSISTENT bash session: working directory (cd), exported environment, activated virtualenvs, and background jobs all persist across calls. stdout and stderr are merged into one stream; large output is truncated keeping the head and tail. To start a long-running process (e.g. a server) set background:true so it keeps running and the call returns immediately — do NOT run a server in the foreground or the call will block until it times out. Do not use ls/find for directory listing (use list_directory); for content search prefer grep; for file discovery prefer glob.",
+    "Execute a command in a PERSISTENT bash session: working directory (cd), exported environment, activated virtualenvs, and background jobs all persist across calls. Commands run non-interactively with stdin closed — never rely on prompts or stdin (pass -y/--yes/--no-input flags, or pipe input explicitly). stdout and stderr are merged into one stream; large output is truncated keeping the head and tail, and the complete output is saved to a file named in the result. To start a long-running process (e.g. a server) set background:true so it keeps running and the call returns immediately — do NOT run a server in the foreground or the call will block until it times out. Do not use ls/find for directory listing (use list_directory); for content search prefer grep; for file discovery prefer glob.",
   parameters: {
     type: "object",
     properties: {
@@ -215,9 +221,8 @@ const shellToolDefinition: ToolDefinition = {
       },
       timeout: {
         type: "integer",
-        minimum: 1,
-        maximum: 600000,
-        description: "Optional timeout in milliseconds. Defaults to 120000 and caps at 600000.",
+        description:
+          "Optional timeout in SECONDS (default 120, max 600). For anything that may run longer, use background:true and poll the log instead.",
       },
       background: {
         type: "boolean",

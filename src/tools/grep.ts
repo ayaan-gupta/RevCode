@@ -25,6 +25,8 @@ export interface GrepToolOutput {
 
 export interface GrepToolOptions {
   cwd?: string;
+  /** Allow paths outside the working directory. */
+  unrestricted?: boolean;
 }
 
 export async function grepFiles(
@@ -33,7 +35,7 @@ export async function grepFiles(
 ): Promise<GrepToolOutput> {
   const normalizedInput = normalizeInput(input);
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const searchPath = resolvePathInsideCwd(normalizedInput.path ?? ".", cwd);
+  const searchPath = resolvePathInsideCwd(normalizedInput.path ?? ".", cwd, options.unrestricted);
   const args = ["--no-heading", "--line-number", "--color=never", normalizedInput.pattern];
 
   if (normalizedInput.glob) {

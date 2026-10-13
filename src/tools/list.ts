@@ -18,6 +18,8 @@ export interface ListToolOutput {
 
 export interface ListToolOptions {
   cwd?: string;
+  /** Allow paths outside the working directory. */
+  unrestricted?: boolean;
 }
 
 export async function listDirectory(
@@ -26,7 +28,7 @@ export async function listDirectory(
 ): Promise<ListToolOutput> {
   const normalizedInput = normalizeInput(input);
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const listPath = resolvePathInsideCwd(normalizedInput.path, cwd);
+  const listPath = resolvePathInsideCwd(normalizedInput.path, cwd, options.unrestricted);
   const relativePath = formatRelativePath(listPath, cwd);
 
   const stat = await fs.stat(listPath);

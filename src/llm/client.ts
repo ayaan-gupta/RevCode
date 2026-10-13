@@ -1,19 +1,38 @@
 /**
- * LLM API client abstraction.
+ * LLM client abstraction and provider selection.
+ *
+ * `createLlmClient` maps a provider name to a concrete client:
+ *
+ *   zai, openai, openrouter, ollama, openai-compat  -> OpenAiCompatClient
+ *   anthropic                                       -> AnthropicClient
+ *   local-test                                      -> LocalTestClient (offline)
+ *
+ * Environment (a `.env` in the working directory is loaded without overriding
+ * variables that are already set; empty values count as unset):
+ *
+ *   Z_AI_API_KEY | ZAI_API_KEY, Z_AI_BASE_URL | ZAI_BASE_URL   zai
+ *   ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL                      anthropic
+ *   OPENAI_API_KEY, OPENAI_BASE_URL                            openai
+ *   OPENROUTER_API_KEY                                         openrouter
+ *   OLLAMA_HOST (default http://localhost:11434)               ollama
+ *   REVCODE_BASE_URL (required), REVCODE_API_KEY (optional)    openai-compat
+ *   REVCODE_LLM_TIMEOUT_MS                                     all network providers
+ *   REVCODE_NO_CACHE=1                                         disables Anthropic prompt caching
+ *
+ * `CreateLlmClientOptions.baseUrl` / `apiKey` take precedence over the above.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { AnthropicClient } from "./anthropic.js";
-import { fetchWithRetry } from "./retry.js";
-import { extractToolCalls } from "./tool-call-parser.js";
+import { OpenAiCompatClient, type OpenAiCompatConfig } from "./openai-compat.js";
 
 const ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 const ZAI_DEFAULT_MODEL = "glm-5.2";
-// glm-5.2 is a reasoning model: completion tokens are split between
-// `reasoning_content` (chain-of-thought) and `content` (the answer). A low cap
-// starves the answer (finish_reason "length"), so default to a generous budget.
-const ZAI_DEFAULT_MAX_TOKENS = 16_384;
+const OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1";
+const OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
+const OLLAMA_DEFAULT_HOST = "http://localhost:11434";
+const OLLAMA_DEFAULT_PORT = "11434";
 
 export interface LlmMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -23,11 +42,30 @@ export interface LlmMessage {
   name?: string;
 }
 
+export interface LlmUsage {
+  /**
+   * Whole prompt size in tokens, INCLUDING any tokens read from or written to
+   * the provider's prompt cache (so it is comparable across providers).
+   */
+  inputTokens: number;
+  outputTokens: number;
+  /** Subset of `inputTokens` served from the provider's prompt cache, when reported. */
+  cachedInputTokens?: number;
+}
+
 export interface LlmResponse {
   content: string;
   toolCalls: LlmToolCall[];
   /** Reasoning/chain-of-thought text, when the model exposes it (e.g. glm-5.2). */
   reasoning?: string;
+  /** Token accounting reported by the provider (best effort). */
+  usage?: LlmUsage;
+  /**
+   * Why generation ended, normalized where possible: "stop" (natural end),
+   * "length" (hit the token limit, output may be truncated) or "tool_calls".
+   * Other provider-specific values (e.g. "content_filter") pass through.
+   */
+  finishReason?: string;
 }
 
 export interface LlmToolCall {
@@ -49,6 +87,18 @@ export interface CompleteOptions {
    * transparently retried (no duplicate tokens) — it surfaces to the caller.
    */
   onDelta?: (delta: LlmStreamDelta) => void;
+  /**
+   * Abort the in-flight request (user interrupt). The call rejects with an
+   * Error whose `name` is "AbortError" and is never retried.
+   */
+  signal?: AbortSignal;
+  /**
+   * Sampling temperature override (harness profile). Ignored for models that
+   * reject sampling parameters (current Claude models).
+   */
+  temperature?: number;
+  /** Max completion tokens override (harness profile); default 16384. */
+  maxTokens?: number;
 }
 
 export interface LlmClient {
@@ -66,52 +116,85 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>; // JSON Schema
 }
 
-export type LlmProvider = "zai" | "anthropic" | "local-test";
+export const LLM_PROVIDERS = [
+  "zai",
+  "anthropic",
+  "openai",
+  "openrouter",
+  "ollama",
+  "openai-compat",
+  "local-test",
+] as const;
+
+export type LlmProvider = (typeof LLM_PROVIDERS)[number];
+
+export function isLlmProvider(value: string): value is LlmProvider {
+  return (LLM_PROVIDERS as readonly string[]).includes(value);
+}
 
 export interface CreateLlmClientOptions {
   model: string;
   provider?: LlmProvider;
+  /** Overrides the provider's base URL (and its `*_BASE_URL` env var). */
+  baseUrl?: string;
+  /** Overrides the provider's API key env var. */
+  apiKey?: string;
 }
+
+type OpenAiCompatProvider = Exclude<LlmProvider, "anthropic" | "local-test">;
 
 export function createLlmClient(modelOrOptions: string | CreateLlmClientOptions): LlmClient {
   loadDotEnv();
 
-  const options =
-    typeof modelOrOptions === "string"
-      ? { model: modelOrOptions, provider: undefined as LlmProvider | undefined }
-      : modelOrOptions;
+  const options: CreateLlmClientOptions =
+    typeof modelOrOptions === "string" ? { model: modelOrOptions } : modelOrOptions;
 
   const provider = resolveProvider(options.provider, options.model);
+  const timeoutMs = readTimeoutMs();
 
   if (provider === "local-test") {
     return new LocalTestClient();
   }
 
   if (provider === "anthropic") {
-    const apiKey = getAnthropicApiKey();
+    const apiKey = options.apiKey ?? getAnthropicApiKey();
     if (!apiKey) {
       throw new Error("ANTHROPIC_API_KEY is required to use the Anthropic provider");
     }
-    return new AnthropicClient(options.model, apiKey);
+    return new AnthropicClient(options.model, apiKey, {
+      baseUrl: options.baseUrl ?? readEnv("ANTHROPIC_BASE_URL"),
+      timeoutMs,
+    });
   }
 
-  const apiKey = getZaiApiKey();
-  if (!apiKey) {
-    throw new Error(
-      `No LLM client configured for model: ${options.model}. Set Z_AI_API_KEY or use --provider local-test.`,
-    );
-  }
-
-  return new ZaiClient(options.model || ZAI_DEFAULT_MODEL, apiKey);
+  return new OpenAiCompatClient({ ...openAiCompatConfig(provider, options), timeoutMs });
 }
 
-function resolveProvider(provider: LlmProvider | undefined, model: string): LlmProvider {
+/**
+ * Picks the provider when none was requested explicitly. A model name that
+ * unambiguously belongs to a provider wins, but only if that provider's key is
+ * configured; otherwise fall back to key availability (Z.ai first).
+ */
+export function resolveProvider(provider: LlmProvider | undefined, model: string): LlmProvider {
   if (provider) {
     return provider;
   }
 
   if (model === "local-test" || model === "test") {
     return "local-test";
+  }
+
+  if (model.startsWith("claude") && getAnthropicApiKey()) {
+    return "anthropic";
+  }
+
+  if (/^(?:gpt-|chatgpt-|o[134](?:-|$))/.test(model) && getOpenAiApiKey()) {
+    return "openai";
+  }
+
+  // OpenRouter model ids are "<vendor>/<model>", e.g. "qwen/qwen3-coder".
+  if (model.includes("/") && getOpenRouterApiKey()) {
+    return "openrouter";
   }
 
   if (getAnthropicApiKey() && !getZaiApiKey()) {
@@ -121,190 +204,123 @@ function resolveProvider(provider: LlmProvider | undefined, model: string): LlmP
   return "zai";
 }
 
-class ZaiClient implements LlmClient {
-  private readonly apiKey: string;
-  private readonly baseUrl: string;
-  private readonly model: string;
-
-  constructor(model: string, apiKey: string) {
-    this.apiKey = apiKey;
-    this.baseUrl = normalizeBaseUrl(
-      process.env.Z_AI_BASE_URL ?? process.env.ZAI_BASE_URL ?? ZAI_DEFAULT_BASE_URL,
-    );
-    this.model = model;
-  }
-
-  async complete(
-    messages: LlmMessage[],
-    tools: ToolDefinition[] = [],
-    options: CompleteOptions = {},
-  ): Promise<LlmResponse> {
-    if (options.onDelta) {
-      return this.completeStreaming(messages, tools, options.onDelta);
-    }
-
-    const response = await fetchWithRetry(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: this.headers(),
-      body: this.requestBody(messages, tools, false),
-    });
-
-    const responseText = await response.text();
-    if (!response.ok) {
-      throw new Error(`Z.ai API request failed (${response.status}): ${responseText}`);
-    }
-
-    const payload = JSON.parse(responseText) as ZaiChatCompletionResponse;
-    const message = payload.choices?.[0]?.message;
-    if (!message) {
-      throw new Error("Z.ai API response did not include a message");
-    }
-
-    const apiToolCalls = (message.tool_calls ?? []).map(fromOpenAiToolCall);
-    const extracted = extractToolCalls({
-      toolCalls: apiToolCalls,
-      content: message.content ?? "",
-      tools,
-    });
-
-    if (extracted.usedFallback) {
-      console.warn(
-        "[revcode] Parsed tool calls from assistant content fallback (XML/inline JSON).",
-      );
-    }
-
-    return {
-      content: extracted.content,
-      toolCalls: extracted.toolCalls,
-      reasoning: message.reasoning_content || undefined,
-    };
-  }
-
-  /**
-   * Streaming completion. fetchWithRetry covers pre-stream (connection/status)
-   * retries; once the body starts and the first delta fires, a mid-stream
-   * failure surfaces to the caller rather than being silently re-streamed.
-   */
-  private async completeStreaming(
-    messages: LlmMessage[],
-    tools: ToolDefinition[],
-    onDelta: (delta: LlmStreamDelta) => void,
-  ): Promise<LlmResponse> {
-    const response = await fetchWithRetry(`${this.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: { ...this.headers(), Accept: "text/event-stream" },
-      body: this.requestBody(messages, tools, true),
-    });
-
-    if (!response.ok || !response.body) {
-      const errorText = response.body ? await response.text() : "";
-      throw new Error(`Z.ai API request failed (${response.status}): ${errorText}`);
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let content = "";
-    let reasoning = "";
-    let deltaEmitted = false;
-    const toolAcc = new Map<number, { id: string; name: string; args: string }>();
-
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) {
-          break;
-        }
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed.startsWith("data:")) {
-            continue;
-          }
-          const data = trimmed.slice("data:".length).trim();
-          if (data === "[DONE]") {
-            continue;
-          }
-
-          let chunk: ZaiStreamChunk;
-          try {
-            chunk = JSON.parse(data) as ZaiStreamChunk;
-          } catch {
-            continue; // skip keep-alives / partial frames
-          }
-
-          const delta = chunk.choices?.[0]?.delta;
-          if (!delta) {
-            continue;
-          }
-          if (delta.reasoning_content) {
-            reasoning += delta.reasoning_content;
-            onDelta({ reasoning: delta.reasoning_content });
-          }
-          if (delta.content) {
-            content += delta.content;
-            deltaEmitted = true;
-            onDelta({ text: delta.content });
-          }
-          for (const tc of delta.tool_calls ?? []) {
-            const index = tc.index ?? 0;
-            const entry = toolAcc.get(index) ?? { id: "", name: "", args: "" };
-            if (tc.id) entry.id = tc.id;
-            if (tc.function?.name) entry.name = tc.function.name;
-            if (tc.function?.arguments) entry.args += tc.function.arguments;
-            toolAcc.set(index, entry);
-          }
-        }
-      }
-    } catch (error) {
-      if (deltaEmitted) {
+function openAiCompatConfig(
+  provider: OpenAiCompatProvider,
+  options: CreateLlmClientOptions,
+): OpenAiCompatConfig {
+  switch (provider) {
+    case "zai": {
+      const apiKey = options.apiKey ?? getZaiApiKey();
+      if (!apiKey) {
         throw new Error(
-          `Z.ai stream interrupted after partial output: ${error instanceof Error ? error.message : String(error)}`,
+          `No LLM client configured for model: ${options.model}. Set Z_AI_API_KEY (or ZAI_API_KEY) or use --provider local-test.`,
         );
       }
-      throw error;
+      return {
+        name: "Z.ai",
+        baseUrl:
+          options.baseUrl ??
+          readEnv("Z_AI_BASE_URL") ??
+          readEnv("ZAI_BASE_URL") ??
+          ZAI_DEFAULT_BASE_URL,
+        model: options.model || ZAI_DEFAULT_MODEL,
+        apiKey,
+        headers: { "Accept-Language": "en-US,en" },
+      };
     }
 
-    const apiToolCalls = [...toolAcc.entries()]
-      .sort((a, b) => a[0] - b[0])
-      .map(([, entry]) =>
-        fromOpenAiToolCall({
-          id: entry.id || `call-${Math.random().toString(36).slice(2)}`,
-          type: "function",
-          function: { name: entry.name, arguments: entry.args },
-        }),
-      );
+    case "openai": {
+      const apiKey = options.apiKey ?? getOpenAiApiKey();
+      if (!apiKey) {
+        throw new Error("OPENAI_API_KEY is required to use the OpenAI provider");
+      }
+      const model = requireModel(provider, options.model);
+      return {
+        name: "OpenAI",
+        baseUrl: options.baseUrl ?? readEnv("OPENAI_BASE_URL") ?? OPENAI_DEFAULT_BASE_URL,
+        model,
+        apiKey,
+        maxTokensParam: "max_completion_tokens",
+        // Reasoning models only accept the default temperature.
+        omitTemperature: /^(?:o\d|gpt-5)/.test(model),
+      };
+    }
 
-    const extracted = extractToolCalls({ toolCalls: apiToolCalls, content, tools });
-    return {
-      content: extracted.content,
-      toolCalls: extracted.toolCalls,
-      reasoning: reasoning || undefined,
-    };
+    case "openrouter": {
+      const apiKey = options.apiKey ?? getOpenRouterApiKey();
+      if (!apiKey) {
+        throw new Error("OPENROUTER_API_KEY is required to use the OpenRouter provider");
+      }
+      return {
+        name: "OpenRouter",
+        baseUrl: options.baseUrl ?? OPENROUTER_DEFAULT_BASE_URL,
+        model: requireModel(provider, options.model),
+        apiKey,
+        headers: { "X-Title": "RevCode" },
+      };
+    }
+
+    case "ollama":
+      return {
+        name: "Ollama",
+        baseUrl: options.baseUrl ?? ollamaBaseUrl(readEnv("OLLAMA_HOST")),
+        model: requireModel(provider, options.model),
+        apiKey: options.apiKey,
+      };
+
+    case "openai-compat": {
+      const baseUrl = options.baseUrl ?? readEnv("REVCODE_BASE_URL");
+      if (!baseUrl) {
+        throw new Error(
+          "REVCODE_BASE_URL is required to use the openai-compat provider (or pass --base-url)",
+        );
+      }
+      return {
+        name: "OpenAI-compatible",
+        baseUrl,
+        model: requireModel(provider, options.model),
+        // Local servers (vLLM, LM Studio, llama.cpp) usually need no key.
+        apiKey: options.apiKey ?? readEnv("REVCODE_API_KEY"),
+      };
+    }
+  }
+}
+
+function requireModel(provider: LlmProvider, model: string): string {
+  if (!model.trim()) {
+    throw new Error(`A model name is required to use the ${provider} provider (pass --model)`);
+  }
+  return model;
+}
+
+/**
+ * `OLLAMA_HOST` follows Ollama's own convention: it may omit the scheme and/or
+ * the port ("127.0.0.1:11434", "gpu-box"). The OpenAI-compatible API lives
+ * under `/v1`.
+ */
+function ollamaBaseUrl(host: string | undefined): string {
+  const raw = host ?? OLLAMA_DEFAULT_HOST;
+  const hasScheme = /^https?:\/\//i.test(raw);
+
+  let root = raw.replace(/\/+$/, "");
+  if (!hasScheme) {
+    try {
+      const url = new URL(`http://${root}`);
+      if (!url.port) {
+        url.port = OLLAMA_DEFAULT_PORT;
+      }
+      root = url.origin;
+    } catch {
+      root = `http://${root}`;
+    }
   }
 
-  private headers(): Record<string, string> {
-    return {
-      Authorization: `Bearer ${this.apiKey}`,
-      "Content-Type": "application/json",
-      "Accept-Language": "en-US,en",
-    };
-  }
+  return root.endsWith("/v1") ? root : `${root}/v1`;
+}
 
-  private requestBody(messages: LlmMessage[], tools: ToolDefinition[], stream: boolean): string {
-    return JSON.stringify({
-      model: this.model,
-      messages: messages.map(toOpenAiMessage),
-      tools: tools.map(toOpenAiTool),
-      tool_choice: "auto",
-      temperature: 0.2,
-      max_tokens: ZAI_DEFAULT_MAX_TOKENS,
-      stream,
-    });
-  }
+function readTimeoutMs(): number | undefined {
+  const parsed = Number(readEnv("REVCODE_LLM_TIMEOUT_MS"));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
 }
 
 class LocalTestClient implements LlmClient {
@@ -357,172 +373,25 @@ class LocalTestClient implements LlmClient {
   }
 }
 
-interface OpenAiMessage {
-  role: "system" | "user" | "assistant" | "tool";
-  content: string | null;
-  tool_call_id?: string;
-  name?: string;
-  tool_calls?: OpenAiToolCall[];
-}
-
-interface OpenAiTool {
-  type: "function";
-  function: {
-    name: string;
-    description: string;
-    parameters: Record<string, unknown>;
-  };
-}
-
-interface OpenAiToolCall {
-  id: string;
-  type: "function";
-  function: {
-    name: string;
-    arguments: string;
-  };
-}
-
-interface ZaiChatCompletionResponse {
-  choices?: Array<{
-    message?: {
-      content?: string | null;
-      reasoning_content?: string | null;
-      tool_calls?: OpenAiToolCall[];
-    };
-  }>;
-}
-
-interface ZaiStreamChunk {
-  choices?: Array<{
-    delta?: {
-      content?: string | null;
-      reasoning_content?: string | null;
-      tool_calls?: Array<{
-        index?: number;
-        id?: string;
-        function?: { name?: string; arguments?: string };
-      }>;
-    };
-  }>;
-}
-
-function toOpenAiMessage(message: LlmMessage): OpenAiMessage {
-  if (message.role === "assistant") {
-    const openAiMessage: OpenAiMessage = {
-      role: "assistant",
-      content: message.content || null,
-    };
-
-    if (message.toolCalls && message.toolCalls.length > 0) {
-      openAiMessage.tool_calls = message.toolCalls.map(toOpenAiToolCall);
-    }
-
-    return openAiMessage;
-  }
-
-  if (message.role === "tool") {
-    const parsedToolResult = parseToolResultMessage(message);
-    return {
-      role: "tool",
-      content: parsedToolResult.content,
-      tool_call_id: parsedToolResult.toolCallId,
-      name: parsedToolResult.name,
-    };
-  }
-
-  return {
-    role: message.role,
-    content: message.content,
-  };
-}
-
-function toOpenAiTool(tool: ToolDefinition): OpenAiTool {
-  return {
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
-    },
-  };
-}
-
-function toOpenAiToolCall(toolCall: LlmToolCall): OpenAiToolCall {
-  return {
-    id: toolCall.id,
-    type: "function",
-    function: {
-      name: toolCall.name,
-      arguments: JSON.stringify(toolCall.arguments),
-    },
-  };
-}
-
-function fromOpenAiToolCall(toolCall: OpenAiToolCall): LlmToolCall {
-  return {
-    id: toolCall.id,
-    name: toolCall.function.name,
-    arguments: parseToolArguments(toolCall.function.arguments),
-  };
-}
-
-function parseToolArguments(rawArguments: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(rawArguments) as unknown;
-    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
-  } catch {
-    // Fall through to preserve the raw string for debuggability.
-  }
-
-  return { input: rawArguments };
-}
-
-function parseToolResultMessage(message: LlmMessage): {
-  content: string;
-  toolCallId: string;
-  name?: string;
-} {
-  if (message.toolCallId) {
-    return {
-      content: message.content,
-      toolCallId: message.toolCallId,
-      name: message.name,
-    };
-  }
-
-  try {
-    const parsed = JSON.parse(message.content) as {
-      toolCallId?: string;
-      name?: string;
-      result?: unknown;
-    };
-
-    return {
-      content: JSON.stringify(parsed.result ?? parsed),
-      toolCallId: parsed.toolCallId ?? "unknown-tool-call",
-      name: parsed.name,
-    };
-  } catch {
-    return {
-      content: message.content,
-      toolCallId: "unknown-tool-call",
-    };
-  }
+function readEnv(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value ? value : undefined;
 }
 
 function getZaiApiKey(): string | undefined {
-  return process.env.Z_AI_API_KEY ?? process.env.ZAI_API_KEY;
+  return readEnv("Z_AI_API_KEY") ?? readEnv("ZAI_API_KEY");
 }
 
 function getAnthropicApiKey(): string | undefined {
-  return process.env.ANTHROPIC_API_KEY;
+  return readEnv("ANTHROPIC_API_KEY");
 }
 
-function normalizeBaseUrl(baseUrl: string): string {
-  return baseUrl.replace(/\/+$/, "");
+function getOpenAiApiKey(): string | undefined {
+  return readEnv("OPENAI_API_KEY");
+}
+
+function getOpenRouterApiKey(): string | undefined {
+  return readEnv("OPENROUTER_API_KEY");
 }
 
 function loadDotEnv(): void {

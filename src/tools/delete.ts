@@ -21,6 +21,8 @@ export interface DeleteToolOutput {
 
 export interface DeleteToolOptions {
   cwd?: string;
+  /** Allow paths outside the working directory. */
+  unrestricted?: boolean;
 }
 
 export async function deleteFile(
@@ -29,7 +31,7 @@ export async function deleteFile(
 ): Promise<DeleteToolOutput> {
   const normalizedInput = normalizeInput(input);
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const deletePath = resolvePathInsideCwd(normalizedInput.path, cwd);
+  const deletePath = resolvePathInsideCwd(normalizedInput.path, cwd, options.unrestricted);
   const relativePath = formatRelativePath(deletePath, cwd);
 
   if (await isIgnoredByGit(deletePath, cwd)) {

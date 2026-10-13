@@ -85,3 +85,75 @@ describe("ShellSession", () => {
     expect(after.stdout.trim()).toBe("recovered");
   }, 20_000);
 });
+
+describe("ShellSession stdin isolation and hardening", () => {
+  it("does not let a stdin-reading command swallow the completion sentinel", async () => {
+    const session = new ShellSession({ cwd: process.cwd() });
+    try {
+      const started = Date.now();
+      const result = await session.run("cat", { timeoutMs: 10_000 });
+      expect(result.timedOut).toBeUndefined();
+      expect(result.exitCode).toBe(0);
+      expect(Date.now() - started).toBeLessThan(5_000);
+
+      const python = await session.run("python3", { timeoutMs: 10_000 });
+      expect(python.timedOut).toBeUndefined();
+      const after = await session.run("echo still-alive", { timeoutMs: 10_000 });
+      expect(after.stdout).toContain("still-alive");
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("survives a syntax error without wedging the session", async () => {
+    const session = new ShellSession({ cwd: process.cwd() });
+    try {
+      const bad = await session.run("echo 'unterminated", { timeoutMs: 10_000 });
+      expect(bad.timedOut).toBeUndefined();
+      expect(bad.exitCode).not.toBe(0);
+      const ok = await session.run("echo fine", { timeoutMs: 10_000 });
+      expect(ok.stdout).toContain("fine");
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("keeps cd and env across calls and sets non-interactive defaults", async () => {
+    const session = new ShellSession({ cwd: process.cwd() });
+    try {
+      await session.run("cd /tmp && export FOO=bar", { timeoutMs: 10_000 });
+      const out = await session.run("pwd; echo $FOO $GIT_TERMINAL_PROMPT $PAGER", { timeoutMs: 10_000 });
+      expect(out.stdout).toContain("/tmp");
+      expect(out.stdout).toContain("bar 0 cat");
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("reports an `exit` in the command and recovers with a fresh session", async () => {
+    const session = new ShellSession({ cwd: process.cwd() });
+    try {
+      const result = await session.run("exit 3", { timeoutMs: 10_000 });
+      expect(result.sessionReset).toBe(true);
+      expect(result.exitCode).toBe(3);
+      expect(result.timedOut).toBeUndefined();
+      const after = await session.run("echo recovered", { timeoutMs: 10_000 });
+      expect(after.stdout).toContain("recovered");
+    } finally {
+      session.dispose();
+    }
+  });
+
+  it("spills truncated output to a file the model can grep", async () => {
+    const session = new ShellSession({ cwd: process.cwd() });
+    try {
+      const result = await session.run("seq 1 20000", { timeoutMs: 20_000 });
+      expect(result.truncated).toBe(true);
+      expect(result.fullOutputFile).toBeTruthy();
+      const { readFileSync } = await import("node:fs");
+      expect(readFileSync(result.fullOutputFile as string, "utf8")).toContain("19999");
+    } finally {
+      session.dispose();
+    }
+  });
+});

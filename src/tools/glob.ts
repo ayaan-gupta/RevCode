@@ -22,6 +22,8 @@ export interface GlobToolOutput {
 
 export interface GlobToolOptions {
   cwd?: string;
+  /** Allow paths outside the working directory. */
+  unrestricted?: boolean;
 }
 
 export async function globFiles(
@@ -30,7 +32,7 @@ export async function globFiles(
 ): Promise<GlobToolOutput> {
   const normalizedInput = normalizeInput(input);
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const searchPath = resolvePathInsideCwd(normalizedInput.path ?? ".", cwd);
+  const searchPath = resolvePathInsideCwd(normalizedInput.path ?? ".", cwd, options.unrestricted);
   const relativeSearchPath = formatRelativePath(searchPath, cwd);
 
   const args = ["--files", "-g", normalizedInput.pattern, relativeSearchPath];

@@ -25,6 +25,8 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { mkdirSync, unlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -51,6 +53,8 @@ export interface ShellRunResult {
   /** True when the command was interrupted/killed and the session restarted. */
   sessionReset?: boolean;
   truncated?: boolean;
+  /** Where the complete output was saved when `truncated` is true. */
+  fullOutputFile?: string;
   /** Present when `background: true`. */
   background?: { pid: number | null; logFile: string };
   /** Human-oriented note (e.g. timeout/reset guidance for the model). */
@@ -73,6 +77,7 @@ export class ShellSession {
   private queue: Promise<unknown> = Promise.resolve();
   private disposed = false;
   private childExited = false;
+  private lastExitCode: number | null = null;
 
   constructor(options: ShellSessionOptions) {
     this.cwd = path.resolve(options.cwd);
@@ -170,13 +175,34 @@ export class ShellSession {
       return this.runBackground(effectiveCommand, marker);
     }
 
-    // Foreground: run the command, then print the sentinel with its exit code.
-    this.write(`${effectiveCommand}\n`);
-    this.write(`printf '\\n%s%d__\\n' "${marker}" "$?"\n`);
+    // Foreground. The command is written to a temp file and SOURCED with stdin
+    // detached from the session pipe. Sending it inline would let any command
+    // that reads stdin (a bare `python3`, `cat`, an apt prompt) swallow the
+    // sentinel line below and hang until the timeout. A file also means a
+    // syntax error (unbalanced quote, heredoc) fails that one command instead
+    // of making bash wait for more input from our pipe. `set +e` afterwards
+    // keeps a stray `set -e` from killing the whole session on the next failure.
+    const scriptFile = this.writeScript(effectiveCommand);
+    const quotedFile = shQuote(scriptFile);
+    this.write(`. ${quotedFile} < /dev/null\n`);
+    this.write(`__rc=$?; set +e; rm -f ${quotedFile}; printf '\\n%s%d__\\n' "${marker}" "$__rc"\n`);
 
     const sentinel = await this.waitForSentinel(marker, timeoutMs);
     if (sentinel.found) {
       return this.finishResult(marker, sentinel.exitCode ?? 0);
+    }
+
+    if (this.childExited) {
+      // The shell itself ended (the command ran `exit`, or it crashed).
+      const code = this.lastExitCode;
+      const out = this.collapseOutput(stripSentinel(this.outBuf, marker));
+      this.hardRestart();
+      return {
+        stdout: out,
+        exitCode: code ?? 1,
+        sessionReset: true,
+        note: "The shell process exited (a command ran `exit` or crashed), so a fresh session was started. cwd/env were reset and background processes started from the old session may have been terminated.",
+      };
     }
 
     // Timed out. Interrupt the foreground command via SIGINT to the group
@@ -193,7 +219,7 @@ export class ShellSession {
       return {
         ...out,
         timedOut: true,
-        note: `Command exceeded ${timeoutMs}ms and was interrupted; the shell session was preserved (cwd/env intact).`,
+        note: `Command exceeded ${formatSeconds(timeoutMs)} and was interrupted; the shell session was preserved (cwd/env intact). For long-running work, rerun it with background:true and poll its log file.`,
       };
     }
 
@@ -205,7 +231,7 @@ export class ShellSession {
       timedOut: true,
       sessionReset: true,
       note:
-        `Command exceeded ${timeoutMs}ms and could not be interrupted, so the shell session was reset. ` +
+        `Command exceeded ${formatSeconds(timeoutMs)} and could not be interrupted, so the shell session was reset. ` +
         `cwd/env were reset to their defaults and ANY background processes you started (servers, watchers) have been terminated.`,
     };
   }
@@ -243,7 +269,19 @@ export class ShellSession {
   private finishResult(marker: string, exitCode: number): ShellRunResult {
     const raw = stripSentinel(this.outBuf, marker);
     const { text, truncated } = truncateHeadTail(raw);
-    return { stdout: text, exitCode, truncated: truncated || undefined };
+    if (!truncated) {
+      return { stdout: text, exitCode };
+    }
+    const fullOutputFile = spillOutput(raw);
+    return {
+      stdout: text,
+      exitCode,
+      truncated: true,
+      fullOutputFile,
+      note: fullOutputFile
+        ? `Output was truncated. The complete output is saved at ${fullOutputFile}; inspect it with grep/sed -n/tail rather than re-running the command.`
+        : undefined,
+    };
   }
 
   private collapseOutput(raw: string): string {
@@ -281,8 +319,9 @@ export class ShellSession {
     };
     child.stdout?.on("data", onData);
     child.stderr?.on("data", onData);
-    child.on("exit", () => {
+    child.on("exit", (code) => {
       this.childExited = true;
+      this.lastExitCode = code;
       this.notify();
     });
     child.on("error", () => {
@@ -296,6 +335,30 @@ export class ShellSession {
     this.write("set +o history 2>/dev/null\n");
     this.write("PS1=''; PS2=''\n");
     this.write("exec 2>&1\n");
+    // Commands run unattended: make well-behaved tools non-interactive so they
+    // fail fast or use defaults instead of waiting on a prompt nobody can answer.
+    this.write(NON_INTERACTIVE_ENV);
+  }
+
+  /** Interrupt the running foreground command (user pressed Ctrl-C). */
+  interrupt(): void {
+    this.killGroup("SIGINT");
+  }
+
+  private writeScript(command: string): string {
+    const dir = path.join(os.tmpdir(), "revcode-cmd");
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${randomUUID()}.sh`);
+    writeFileSync(file, `${command}\n`, { mode: 0o600 });
+    // Best-effort cleanup if the session dies before the in-band `rm -f` runs.
+    setTimeout(() => {
+      try {
+        unlinkSync(file);
+      } catch {
+        // already removed
+      }
+    }, MAX_TIMEOUT_MS + 60_000).unref();
+    return file;
   }
 
   private hardRestart(): void {
@@ -368,6 +431,27 @@ export class ShellSession {
 }
 
 // --- helpers ---------------------------------------------------------------
+
+const NON_INTERACTIVE_ENV =
+  "export DEBIAN_FRONTEND=noninteractive GIT_TERMINAL_PROMPT=0 PAGER=cat GIT_PAGER=cat MANPAGER=cat EDITOR=true GIT_EDITOR=true VISUAL=true PIP_NO_INPUT=1 PIP_DISABLE_PIP_VERSION_CHECK=1 CI=1 NPM_CONFIG_YES=true NPM_CONFIG_UPDATE_NOTIFIER=false\n";
+
+function formatSeconds(ms: number): string {
+  const seconds = ms / 1000;
+  return `${Number.isInteger(seconds) ? seconds : seconds.toFixed(1)}s`;
+}
+
+/** Save complete output so the model can grep it instead of re-running the command. */
+function spillOutput(raw: string): string | undefined {
+  try {
+    const dir = path.join(os.tmpdir(), "revcode-out");
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `${randomUUID().slice(0, 12)}.log`);
+    writeFileSync(file, raw, "utf8");
+    return file;
+  } catch {
+    return undefined;
+  }
+}
 
 function clampTimeout(timeoutMs: number | undefined): number {
   if (timeoutMs === undefined) {

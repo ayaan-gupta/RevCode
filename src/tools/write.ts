@@ -20,6 +20,8 @@ export interface WriteToolOutput {
 
 export interface WriteToolOptions {
   cwd?: string;
+  /** Allow paths outside the working directory. */
+  unrestricted?: boolean;
 }
 
 export async function writeFile(
@@ -28,7 +30,7 @@ export async function writeFile(
 ): Promise<WriteToolOutput> {
   const normalizedInput = normalizeInput(input);
   const cwd = path.resolve(options.cwd ?? process.cwd());
-  const writePath = resolvePathInsideCwd(normalizedInput.path, cwd);
+  const writePath = resolvePathInsideCwd(normalizedInput.path, cwd, options.unrestricted);
   const relativePath = formatRelativePath(writePath, cwd);
 
   const existingContent = await readExistingFile(writePath, relativePath);
