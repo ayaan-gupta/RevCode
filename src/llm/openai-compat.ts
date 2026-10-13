@@ -59,6 +59,8 @@ export interface OpenAiCompatConfig extends TimeoutConfig {
    * `max_tokens`; most other servers only understand it.
    */
   maxTokensParam?: "max_tokens" | "max_completion_tokens";
+  /** Provider has a request-level thinking switch (`thinking: {type: "disabled"}`, Z.ai style). */
+  thinkingToggle?: "zai";
 }
 
 export class OpenAiCompatClient implements LlmClient {
@@ -267,6 +269,9 @@ export class OpenAiCompatClient implements LlmClient {
       ...(tools.length > 0 ? { tools: tools.map(toOpenAiTool), tool_choice: "auto" } : {}),
       temperature,
       [this.config.maxTokensParam ?? "max_tokens"]: resolveMaxTokens(options.maxTokens),
+      ...(options.thinking === "off" && this.config.thinkingToggle === "zai"
+        ? { thinking: { type: "disabled" } }
+        : {}),
       stream,
       ...(stream ? { stream_options: { include_usage: true } } : {}),
     });

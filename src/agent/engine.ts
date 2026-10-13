@@ -234,6 +234,7 @@ export class AgentEngine {
     let stallNudges = 0;
     let narrationNudges = 0;
     let overflowRetries = 0;
+    let transientRetries = 0;
     let stopReason: StopReason = "max_iterations";
     let errorMessage: string | undefined;
 
@@ -261,23 +262,26 @@ export class AgentEngine {
         await this.compactIfNeeded(signal);
         this.observer.llmStart?.();
 
+        // Always stream from the provider: a non-streaming request sends no bytes until the
+        // whole (possibly minutes-long) generation is done, so slow reasoning turns trip the
+        // header timeout and get restarted from scratch. `this.stream` only controls whether
+        // text is forwarded to the observer.
         let streamed = false;
-        const onDelta = this.stream
-          ? (delta: { text?: string }) => {
-              if (delta.text) {
-                streamed = true;
-                this.observer.textDelta?.(delta.text);
-              }
-            }
-          : undefined;
+        const onDelta = (delta: { text?: string }): void => {
+          if (this.stream && delta.text) {
+            streamed = true;
+            this.observer.textDelta?.(delta.text);
+          }
+        };
 
         let response: LlmResponse;
         try {
           response = await this.llm.complete(this.messages, this.tools.definitions(), {
-            ...(onDelta ? { onDelta } : {}),
+            onDelta,
             signal,
             temperature: this.profile.temperature,
             maxTokens: this.profile.maxTokens,
+            thinking: this.profile.thinking,
           });
         } catch (error) {
           this.observer.llmEnd?.({ content: "", streamed });
@@ -294,10 +298,20 @@ export class AgentEngine {
               continue;
             }
           }
+          // A dropped connection or stalled stream mid-generation is usually transient: retry
+          // the step rather than ending a long-running task.
+          if (isTransientStreamError(message) && transientRetries < MAX_TRANSIENT_RETRIES) {
+            transientRetries += 1;
+            this.observer.notice?.(`model call failed (${message.slice(0, 120)}); retrying (${transientRetries}/${MAX_TRANSIENT_RETRIES})`);
+            await sleepUnlessAborted(2_000 * transientRetries, signal);
+            iterations -= 1;
+            continue;
+          }
           stopReason = "error";
           errorMessage = message;
           break;
         }
+        transientRetries = 0;
 
         this.stats.apiCalls += 1;
         addUsage(turnUsage, response.usage);
@@ -711,4 +725,25 @@ function shortHash(text: string): string {
     h = ((h << 5) + h + text.charCodeAt(i)) | 0;
   }
   return (h >>> 0).toString(36);
+}
+
+const MAX_TRANSIENT_RETRIES = 3;
+
+/** Failures that arrive after a response has started (so `fetchWithRetry` cannot retry them). */
+export function isTransientStreamError(message: string): boolean {
+  return /stream interrupted|stream stalled|stream (?:was )?idle|idle timeout|timed? ?out|ECONNRESET|socket hang up|terminated|other side closed|fetch failed|ETIMEDOUT|EPIPE/i.test(message);
+}
+
+function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true },
+    );
+  });
 }

@@ -8,7 +8,7 @@ import { createVerifyGate } from "../harness/verify-gate.js";
 import { ToolRegistry } from "../tools/index.js";
 import { TimeBudget } from "../harness/time-budget.js";
 import type { LlmMessage } from "../llm/client.js";
-import { AgentEngine, looksLikeUnfinishedNarration, MAX_TOOL_RESULT_CHARS, type EngineOptions } from "./engine.js";
+import { AgentEngine, isTransientStreamError, looksLikeUnfinishedNarration, MAX_TOOL_RESULT_CHARS, type EngineOptions } from "./engine.js";
 
 const registries: ToolRegistry[] = [];
 afterEach(() => {
@@ -343,6 +343,61 @@ describe("long-session context management", () => {
     expect(["complete", "error"]).toContain(result.stopReason);
     if (result.stopReason === "complete") {
       expect(engine.messages.some((m) => m.content.includes("[Summary of earlier work]"))).toBe(true);
+    }
+  });
+});
+
+describe("provider streaming and transient failures", () => {
+  it("always asks the client to stream, so slow reasoning turns never hit a header timeout", async () => {
+    const { engine, llm } = makeEngine([say("hi")]);
+    await engine.runTurn("hello");
+    expect(typeof llm.calls[0]?.options?.onDelta).toBe("function");
+  });
+
+  it("passes the profile's thinking mode to the client", async () => {
+    const { engine, llm } = makeEngine([say("hi")], { profile: withProfile(DEFAULT_PROFILE, { thinking: "off" }) });
+    await engine.runTurn("hello");
+    expect(llm.calls[0]?.options?.thinking).toBe("off");
+  });
+
+  it("retries a step whose stream stalled instead of ending the run", async () => {
+    const { engine, llm } = makeEngine([
+      () => {
+        throw new Error("Stream stalled: no data received for 300000ms");
+      },
+      say("recovered"),
+    ]);
+    const result = await engine.runTurn("hello");
+    expect(result.stopReason).toBe("complete");
+    expect(result.finalContent).toBe("recovered");
+    expect(llm.calls).toHaveLength(2);
+  }, 15_000);
+
+  it("gives up after repeated transient failures and does not retry real API errors", async () => {
+    const transient = makeEngine([
+      () => {
+        throw new Error("stream interrupted after partial output: terminated");
+      },
+    ]);
+    const result = await transient.engine.runTurn("hello");
+    expect(result.stopReason).toBe("error");
+    expect(transient.llm.calls).toHaveLength(4); // first try + 3 retries
+
+    const fatal = makeEngine([
+      () => {
+        throw new Error("Z.ai API request failed (401): invalid key");
+      },
+    ]);
+    expect((await fatal.engine.runTurn("hello")).stopReason).toBe("error");
+    expect(fatal.llm.calls).toHaveLength(1);
+  }, 30_000);
+
+  it("recognizes transient failure messages", () => {
+    for (const message of ["Stream stalled: no data received for 1000ms", "terminated", "fetch failed (ECONNRESET)", "socket hang up"]) {
+      expect(isTransientStreamError(message)).toBe(true);
+    }
+    for (const message of ["Z.ai API request failed (400): bad request", "context length exceeded"]) {
+      expect(isTransientStreamError(message)).toBe(false);
     }
   });
 });

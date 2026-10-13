@@ -23,7 +23,8 @@ await build({
   platform: "node",
   format: "esm",
   target: "node20",
-  outfile: "dist/revcode.mjs",
+  // An optional argument builds somewhere else (e.g. an A/B candidate) without touching dist/revcode.mjs.
+  outfile: process.argv[2] ?? "dist/revcode.mjs",
   banner: { js: cjsShim },
   logLevel: "info",
 });

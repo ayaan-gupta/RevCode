@@ -48,6 +48,19 @@ afterEach(() => {
 });
 
 describe("OpenAiCompatClient request", () => {
+  it("sends the Z.ai thinking switch only when thinking is off and the provider supports it", async () => {
+    const reply = () => jsonResponse({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] });
+    const { requests } = stubFetch(reply);
+
+    await new OpenAiCompatClient({ ...BASE, thinkingToggle: "zai" }).complete(USER, [], { thinking: "off" });
+    await new OpenAiCompatClient({ ...BASE, thinkingToggle: "zai" }).complete(USER, [], { thinking: "on" });
+    await new OpenAiCompatClient(BASE).complete(USER, [], { thinking: "off" });
+
+    expect(requests[0].body).toMatchObject({ thinking: { type: "disabled" } });
+    expect(requests[1].body).not.toHaveProperty("thinking");
+    expect(requests[2].body).not.toHaveProperty("thinking");
+  });
+
   it("posts to <baseUrl>/chat/completions with auth, defaults and tools", async () => {
     const { requests } = stubFetch(() =>
       jsonResponse({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }),

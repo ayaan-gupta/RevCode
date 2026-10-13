@@ -99,6 +99,8 @@ export interface CompleteOptions {
   temperature?: number;
   /** Max completion tokens override (harness profile); default 16384. */
   maxTokens?: number;
+  /** "off" disables chain-of-thought where the provider has a switch (Z.ai); ignored elsewhere. */
+  thinking?: "on" | "off";
 }
 
 export interface LlmClient {
@@ -226,6 +228,7 @@ function openAiCompatConfig(
         model: options.model || ZAI_DEFAULT_MODEL,
         apiKey,
         headers: { "Accept-Language": "en-US,en" },
+        thinkingToggle: "zai",
       };
     }
 

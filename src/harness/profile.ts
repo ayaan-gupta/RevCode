@@ -17,6 +17,12 @@ export type EditMode = "replace" | "patch" | "anchored" | "whole";
 export type PromptStyle = "standard" | "terse" | "checklist";
 /** How tool JSON schemas are presented to the model. */
 export type ToolSchemaStyle = "full" | "flat";
+/**
+ * Whether the model's chain-of-thought is enabled. "off" is honored by providers
+ * with a thinking switch (Z.ai/GLM) and ignored elsewhere. Reasoning models can
+ * spend minutes on one turn, which is expensive under a wall-clock limit.
+ */
+export type ThinkingMode = "on" | "off";
 
 export interface HarnessProfile {
   version: 1;
@@ -24,6 +30,7 @@ export interface HarnessProfile {
   editMode: EditMode;
   promptStyle: PromptStyle;
   toolSchema: ToolSchemaStyle;
+  thinking: ThinkingMode;
   /** Run contiguous read-only tool calls concurrently. */
   parallelTools: boolean;
   temperature: number;
@@ -44,6 +51,7 @@ export const DEFAULT_PROFILE: Readonly<HarnessProfile> = Object.freeze({
   editMode: "replace",
   promptStyle: "standard",
   toolSchema: "full",
+  thinking: "on",
   parallelTools: true,
   temperature: 0.2,
   maxTokens: 16_384,
@@ -58,6 +66,7 @@ export const PROFILE_SEARCH_SPACE = {
   editMode: ["replace", "patch", "anchored", "whole"],
   promptStyle: ["standard", "terse", "checklist"],
   toolSchema: ["full", "flat"],
+  thinking: ["on", "off"],
   parallelTools: [true, false],
   temperature: [0, 0.2, 0.6],
   verifyGate: [true, false],
@@ -69,6 +78,7 @@ export type TunableKnob = keyof typeof PROFILE_SEARCH_SPACE;
 const EDIT_MODES: readonly EditMode[] = ["replace", "patch", "anchored", "whole"];
 const PROMPT_STYLES: readonly PromptStyle[] = ["standard", "terse", "checklist"];
 const TOOL_SCHEMAS: readonly ToolSchemaStyle[] = ["full", "flat"];
+const THINKING_MODES: readonly ThinkingMode[] = ["on", "off"];
 
 /** Coerce arbitrary JSON into a valid profile, falling back per-field to defaults. */
 export function sanitizeProfile(raw: unknown, base: HarnessProfile = DEFAULT_PROFILE): HarnessProfile {
@@ -85,6 +95,7 @@ export function sanitizeProfile(raw: unknown, base: HarnessProfile = DEFAULT_PRO
     editMode: pick(input.editMode, EDIT_MODES, base.editMode),
     promptStyle: pick(input.promptStyle, PROMPT_STYLES, base.promptStyle),
     toolSchema: pick(input.toolSchema, TOOL_SCHEMAS, base.toolSchema),
+    thinking: pick(input.thinking, THINKING_MODES, base.thinking),
     parallelTools: bool(input.parallelTools, base.parallelTools),
     temperature: num(input.temperature, base.temperature, 0, 2),
     maxTokens: Math.round(num(input.maxTokens, base.maxTokens, 256, 200_000)),

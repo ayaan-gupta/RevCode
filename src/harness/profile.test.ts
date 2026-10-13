@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   DEFAULT_PROFILE,
+  PROFILE_SEARCH_SPACE,
   describeProfileDiff,
   loadStoredProfile,
   profileKey,
@@ -56,5 +57,14 @@ describe("profile", () => {
       "temperature: 0.2 → 0",
     ]);
     expect(profileKey(tuned)).not.toBe(profileKey(DEFAULT_PROFILE));
+  });
+});
+
+describe("thinking knob", () => {
+  it("defaults on, accepts off, and ignores garbage", () => {
+    expect(DEFAULT_PROFILE.thinking).toBe("on");
+    expect(sanitizeProfile({ thinking: "off" }).thinking).toBe("off");
+    expect(sanitizeProfile({ thinking: "maybe" }).thinking).toBe("on");
+    expect(PROFILE_SEARCH_SPACE.thinking).toEqual(["on", "off"]);
   });
 });

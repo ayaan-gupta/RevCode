@@ -117,7 +117,13 @@ class RevCodeAgent(BaseInstalledAgent):
             ),
         )
 
-        bundle = Path(__file__).resolve().parents[1] / "dist" / "revcode.mjs"
+        # REVCODE_EVAL_BUNDLE selects another prebuilt bundle (for A/B runs of a candidate build).
+        override = os.environ.get("REVCODE_EVAL_BUNDLE")
+        bundle = (
+            Path(override).expanduser()
+            if override
+            else Path(__file__).resolve().parents[1] / "dist" / "revcode.mjs"
+        )
         if not bundle.exists():
             raise FileNotFoundError(
                 f"Prebuilt bundle not found at {bundle}. Run `npm run bundle` before launching Harbor."
