@@ -9,6 +9,8 @@ Plus everything a serious harness needs in 2026: streaming TUI, permission modes
 
 > **Status:** active development. All of the below is covered by automated tests (`npm test`), but **no real-model benchmark numbers are claimed** — see [docs/terminal-bench.md](docs/terminal-bench.md) for what has and hasn't been measured.
 
+Requires Node ≥ 20 and `git`; runs on Linux and macOS (the shell tool needs `bash`). Windows is not supported yet.
+
 ## Quick start
 
 ```bash

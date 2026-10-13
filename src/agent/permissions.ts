@@ -97,9 +97,9 @@ export class PermissionManager {
 
   /** Pure decision for a tool call (no side effects, no prompting). */
   evaluate(tool: string, args: Record<string, unknown>): Evaluation {
-    const subject = ruleSubject(tool, args);
+    const subject = ruleSubjects(tool, args);
 
-    const denied = this.denyRules.find((rule) => ruleMatches(rule, tool, subject));
+    const denied = this.denyRules.find((rule) => ruleMatches(rule, tool, subject, "any"));
     if (denied) {
       return { action: "deny", reason: `Denied by permission rule "${denied}".` };
     }
@@ -128,7 +128,7 @@ export class PermissionManager {
       };
     }
 
-    const allowedBy = this.allowRules.find((rule) => ruleMatches(rule, tool, subject));
+    const allowedBy = this.allowRules.find((rule) => ruleMatches(rule, tool, subject, "all"));
     if (allowedBy) {
       return { action: "allow", reason: `allowed by rule "${allowedBy}"` };
     }
@@ -226,26 +226,49 @@ export class PermissionManager {
 
 // --- rules -------------------------------------------------------------------
 
-/** What a rule's `(pattern)` is matched against for this tool call. */
-function ruleSubject(tool: string, args: Record<string, unknown>): string | undefined {
-  if (tool === "shell") return typeof args.command === "string" ? args.command : undefined;
-  if (typeof args.path === "string") return args.path;
-  return undefined;
+/**
+ * What a rule's `(pattern)` is matched against for this tool call. A call can touch
+ * several files (apply_patch), so this is a list: a DENY rule fires if ANY subject
+ * matches, an ALLOW rule only if ALL of them do.
+ */
+function ruleSubjects(tool: string, args: Record<string, unknown>): string[] {
+  if (tool === "shell") return typeof args.command === "string" ? [args.command] : [];
+  if (tool === "apply_patch") {
+    const text = String(args.input ?? args.patch ?? "");
+    return [...text.matchAll(/^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm), ...text.matchAll(/^\*\*\* Move to: (.+)$/gm)].map((m) => m[1].trim());
+  }
+  if (typeof args.path === "string") return [args.path];
+  return [];
 }
 
-export function ruleMatches(rule: string, tool: string, subject: string | undefined): boolean {
+/**
+ * The file-editing tools are one family: a rule written for `edit_file(src/secret*)`
+ * must also stop `apply_patch` or `write_file` from touching those files, or it is
+ * trivially bypassed by picking a different tool.
+ */
+function sameToolFamily(rulePattern: string, tool: string): boolean {
+  if (!EDIT_TOOLS.has(tool)) return false;
+  return [...EDIT_TOOLS].some((editTool) => globToRegExp(rulePattern.trim()).test(editTool));
+}
+
+export function ruleMatches(rule: string, tool: string, subject: string | string[] | undefined, mode: "any" | "all" = "any"): boolean {
   const match = /^([^()]+?)(?:\((.*)\))?$/.exec(rule.trim());
   if (!match) {
     return false;
   }
   const [, toolPattern, subjectPattern] = match;
-  if (!globToRegExp(toolPattern.trim()).test(tool)) {
+  if (!globToRegExp(toolPattern.trim()).test(tool) && !sameToolFamily(toolPattern, tool)) {
     return false;
   }
   if (subjectPattern === undefined || subjectPattern === "") {
     return true;
   }
-  return subject !== undefined && globToRegExp(subjectPattern).test(subject);
+  const subjects = subject === undefined ? [] : Array.isArray(subject) ? subject : [subject];
+  if (subjects.length === 0) {
+    return false;
+  }
+  const matcher = globToRegExp(subjectPattern);
+  return mode === "all" ? subjects.every((s) => matcher.test(s)) : subjects.some((s) => matcher.test(s));
 }
 
 /** `*` and `**` both match any run of characters (including `/`); `?` matches one. */

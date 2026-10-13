@@ -120,7 +120,7 @@ export const shellBatchCsvScript: DynoTask = {
   id: "shell-batch-csv-script",
   title: "Write and run a bash script that filters and sorts CSV exports",
   category: "shell",
-  difficulty: 2,
+  difficulty: 3,
   instruction:
     "The `incoming/` directory holds CSV exports with the header `id,name,status,amount` (plain comma-separated, no " +
     "quoting). Write a bash script `process.sh` in this directory that, for every `*.csv` file in `incoming/`, keeps only " +

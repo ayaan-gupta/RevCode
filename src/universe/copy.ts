@@ -66,6 +66,8 @@ export interface CopyResult {
 export interface CopyOptions {
   linked?: readonly string[];
   limits?: Partial<CopyLimits>;
+  /** Absolute paths never copied (RevCode's own state dir, which may live inside the project). */
+  skipPaths?: readonly string[];
 }
 
 export class UniverseTooLargeError extends Error {
@@ -86,11 +88,15 @@ export async function copyProject(source: string, dest: string, options: CopyOpt
   const relFiles = isGit ? await listGitFiles(source) : listWalk(source);
 
   const excluded = new Set<string>(DEFAULT_EXCLUDES);
+  const skip = (options.skipPaths ?? []).map((p) => path.resolve(p));
   for (const rel of relFiles) {
     if (hasExcludedSegment(rel, excluded)) {
       continue;
     }
     const from = path.join(source, rel);
+    if (skip.some((p) => from === p || from.startsWith(p + path.sep))) {
+      continue;
+    }
     const to = path.join(dest, rel);
     let stat;
     try {

@@ -71,9 +71,13 @@ describe("progress + dry run", () => {
     expect(formatTuneProgress({ type: "run", task: "t", knob: "baseline", passed: false, done: 1, total: 5 })).toContain("✘ t");
     expect(formatTuneProgress({ type: "confirm-start", runs: 12 })).toContain("12 runs");
   });
-  it("describes the plan without spending anything", () => {
+  it("describes the plan without spending anything, and flags a thin budget", () => {
     const lines = formatDryRun([task("a", "edit")], 2, 80, ["replace", "whole"]);
     expect(lines.join("\n")).toContain("No model calls were made");
     expect(lines.join("\n")).toContain("replace, whole");
+
+    const many = Array.from({ length: 16 }, (_, i) => task(`t${i}`, "edit"));
+    expect(formatDryRun(many, 1, 60, ["replace"]).join("\n")).toContain("thin search");
+    expect(formatDryRun(many, 1, 200, ["replace"]).join("\n")).not.toContain("thin search");
   });
 });

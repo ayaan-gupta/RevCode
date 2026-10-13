@@ -1,0 +1,95 @@
+/**
+ * Spawns the real entry point so wiring regressions (subcommand dispatch, dynamic
+ * imports, flag parsing, config layering) are caught — unit tests alone can't.
+ */
+
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it } from "vitest";
+
+const entry = path.resolve(__dirname, "index.ts");
+// Absolute path: the child runs in a temp directory, where `--import tsx` would not resolve.
+const tsxCli = path.resolve(__dirname, "..", "node_modules", "tsx", "dist", "cli.mjs");
+
+function revcode(args: string[], cwd: string, home: string) {
+  return spawnSync(process.execPath, [tsxCli, entry, ...args], {
+    cwd,
+    env: { ...process.env, REVCODE_HOME: home, NO_COLOR: "1" },
+    encoding: "utf8",
+    timeout: 60_000,
+  });
+}
+
+describe("revcode CLI (end to end)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "revcode-e2e-"));
+  const home = path.join(dir, "home");
+  writeFileSync(path.join(dir, "note.txt"), "hello e2e\n");
+
+  it("prints help and version", () => {
+    expect(revcode(["--version"], dir, home).stdout).toMatch(/^revcode \d+\.\d+\.\d+/);
+    const help = revcode(["--help"], dir, home).stdout;
+    expect(help).toContain("revcode tune");
+    expect(help).toContain("--universe");
+  });
+
+  it("runs a headless task through the whole stack with the local test provider", () => {
+    const result = revcode(
+      ["run", "--provider", "local-test", "--model", "test", "--no-snapshot", "--no-instructions", '/tool read_file {"path":"note.txt"}'],
+      dir,
+      home,
+    );
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("[read_file(");
+    expect(result.stdout).toContain("hello e2e");
+  });
+
+  it("emits a machine-readable summary with --output-format json", () => {
+    const result = revcode(
+      ["run", "--provider", "local-test", "--model", "test", "--no-snapshot", "--output-format", "json", '/tool list_directory {"path":"."}'],
+      dir,
+      home,
+    );
+    expect(result.status).toBe(0);
+    const summary = JSON.parse(result.stdout.trim().split("\n").at(-1) as string) as Record<string, unknown>;
+    expect(summary).toMatchObject({ stopReason: "complete", toolCalls: 1, model: "test" });
+  });
+
+  it("rejects bad flags with a clear error and non-zero exit", () => {
+    const result = revcode(["--bogus"], dir, home);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Unknown argument: --bogus");
+  });
+
+  it("lists sessions/universes/profile on a clean home without crashing", () => {
+    expect(revcode(["sessions"], dir, home).stdout).toContain("No saved sessions");
+    expect(revcode(["universes"], dir, home).stdout).toContain("revcode --universe");
+    expect(revcode(["profile", "show", "--provider", "local-test", "--model", "test"], dir, home).stdout).toContain("Profile source: default");
+  });
+
+  it("plans a Dyno run without calling any model", () => {
+    const result = revcode(["tune", "--dry-run", "--provider", "local-test", "--model", "test"], dir, home);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("No model calls were made");
+    expect(result.stdout).toContain("Edit modes in play");
+  });
+
+  it("runs a task inside a Parallel Universe, then lands it into the project", () => {
+    const project = mkdtempSync(path.join(os.tmpdir(), "revcode-e2e-proj-"));
+    writeFileSync(path.join(project, "a.txt"), "before\n");
+    const run = revcode(
+      ["run", "--universe", "--provider", "local-test", "--model", "test", "--no-snapshot", "--no-instructions", '/tool write_file {"path":"a.txt","content":"after\\n"}'],
+      project,
+      home,
+    );
+    expect(run.status).toBe(0);
+    expect(run.stdout).toMatch(/Universe u\d+-[0-9a-f]+: 1 file\(s\) changed/);
+    expect(execFileSync("cat", [path.join(project, "a.txt")], { encoding: "utf8" })).toBe("before\n"); // untouched until landed
+
+    const landed = revcode(["universes", "land", "--yes"], project, home);
+    expect(landed.status).toBe(0);
+    expect(landed.stdout).toContain("Landed: 1 written");
+    expect(execFileSync("cat", [path.join(project, "a.txt")], { encoding: "utf8" })).toBe("after\n");
+  });
+});

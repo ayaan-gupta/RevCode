@@ -175,6 +175,50 @@ describe("applyHashlineEdits", () => {
   });
 });
 
+describe("randomized edits against an independent oracle", () => {
+  it("places replaces, deletes, appends and prepends exactly where an in-order rebuild does", () => {
+    let seed = 99;
+    const random = (): number => {
+      seed = (seed * 1664525 + 1013904223) % 4294967296;
+      return seed / 4294967296;
+    };
+    for (let round = 0; round < 200; round += 1) {
+      const count = 1 + Math.floor(random() * 12);
+      const original = Array.from({ length: count }, (_, i) => `orig ${i + 1} ${Math.floor(random() * 3)}`);
+      const text = `${original.join("\n")}\n`;
+      const edits: HashlineEdit[] = [];
+      const replaced = new Map<number, string[]>();
+      const before = new Map<number, string[]>();
+      const after = new Map<number, string[]>();
+      for (let line = 1; line <= count; line += 1) {
+        const roll = random();
+        const t = formatLineTag(line, original[line - 1]);
+        if (roll < 0.25) {
+          const content = random() < 0.3 ? [] : [`new ${line}`, `new ${line}b`];
+          replaced.set(line, content);
+          edits.push({ op: "replace", tag: t, content });
+        } else if (roll < 0.4) {
+          before.set(line, [`pre ${line}`]);
+          edits.push({ op: "prepend", before: t, content: [`pre ${line}`] });
+        } else if (roll < 0.55) {
+          after.set(line, [`post ${line}`]);
+          edits.push({ op: "append", after: t, content: [`post ${line}`] });
+        }
+      }
+      const expected: string[] = [];
+      for (let line = 1; line <= count; line += 1) {
+        expected.push(...(before.get(line) ?? []));
+        expected.push(...(replaced.get(line) ?? [original[line - 1]]));
+        expected.push(...(after.get(line) ?? []));
+      }
+      // Shuffle the request order: the result must not depend on it.
+      edits.sort(() => random() - 0.5);
+      const result = applyHashlineEdits(text, edits).content;
+      expect(result).toBe(expected.length === 0 ? "" : `${expected.join("\n")}\n`);
+    }
+  });
+});
+
 describe("validation", () => {
   it("rejects a stale tag with the current anchors and context", () => {
     const changed = SOURCE.replace("return 1;", "return 9;");

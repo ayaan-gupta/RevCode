@@ -43,6 +43,8 @@ export interface TuneOptions {
   /** Maximum number of task runs to spend in total. */
   budget?: number;
   concurrency?: number;
+  /** Task ids that must never run at the same time as each other (e.g. they bind a fixed port). */
+  serialTaskIds?: ReadonlySet<string>;
   /** Knob order (most impactful first). */
   knobs?: readonly TunableKnob[];
   /** Edit modes the search may use (default: all implemented). */
@@ -151,8 +153,16 @@ export async function tuneProfile(options: TuneOptions): Promise<TuneResult> {
     totalPlanned = jobs.length;
     done = 0;
 
+    let serialTail: Promise<unknown> = Promise.resolve();
+    const runExclusive = <T,>(fn: () => Promise<T>): Promise<T> => {
+      const run = serialTail.then(fn, fn);
+      serialTail = run.catch(() => undefined);
+      return run;
+    };
+
     const results = await mapPool(jobs, concurrency, async (job) => {
-      const result = await options.runTask(job.task, profile, job.trial);
+      const exec = (): Promise<TaskRunResult> => options.runTask(job.task, profile, job.trial);
+      const result = await (options.serialTaskIds?.has(job.task.id) ? runExclusive(exec) : exec());
       done += 1;
       tokens.input += result.inputTokens;
       tokens.output += result.outputTokens;

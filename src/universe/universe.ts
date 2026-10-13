@@ -27,7 +27,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { safeSegment, universesDir } from "../config/paths.js";
+import { revcodeHome, safeSegment, universesDir } from "../config/paths.js";
 import { copyProject, DEFAULT_EXCLUDES, type CopyOptions } from "./copy.js";
 import { gitText, runPlainGit, runShadowGit, shadowHandle, type ShadowGitHandle } from "./git.js";
 
@@ -138,7 +138,10 @@ export class Universe {
     const handle = shadowHandle(dir);
 
     try {
-      const copied = await copyProject(projectRoot, handle.workTree, options);
+      const copied = await copyProject(projectRoot, handle.workTree, {
+        ...options,
+        skipPaths: [...(options.skipPaths ?? []), revcodeHome()],
+      });
       await initShadow(handle);
 
       const now = new Date().toISOString();

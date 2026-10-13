@@ -5,6 +5,10 @@
  * decoding (BOM, CRLF), binary/UTF-8 validation, and "did you mean" suggestions
  * for missing paths. Keeping them here means edit_file, apply_patch,
  * edit_anchored and write_file all treat a file's bytes the same way.
+ *
+ * The "Did you mean" suggestions and the continuation notice follow the
+ * conventions of sst/opencode's read tool (MIT, Copyright (c) 2025 opencode);
+ * the implementation is independent. See THIRD_PARTY_NOTICES.md.
  */
 
 import { execFile } from "node:child_process";
@@ -289,8 +293,10 @@ export function decodeText(raw: string): DecodedText {
 /** Turn LF `text` (an edited version of `decoded.text`) back into the file's own framing. */
 export function encodeText(decoded: DecodedText, text: string): string {
   let body = text;
-  if (decoded.eol === "\r\n") {
-    body = decoded.mixed ? restoreMixedEndings(decoded, text) : text.replace(/\n/g, "\r\n");
+  if (decoded.mixed) {
+    body = restoreMixedEndings(decoded, text);
+  } else if (decoded.eol === "\r\n") {
+    body = text.replace(/\n/g, "\r\n");
   }
   return decoded.bom ? `\uFEFF${body}` : body;
 }

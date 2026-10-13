@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { isTmuxAvailable, TerminalManager } from "./terminal.js";
+import { exitCodeFromScreen, isTmuxAvailable, TerminalManager } from "./terminal.js";
 
 const tmux = isTmuxAvailable();
 const managers: TerminalManager[] = [];
@@ -13,7 +13,8 @@ function manager(): TerminalManager {
   return m;
 }
 
-describe.skipIf(!tmux)("terminal tool (tmux)", () => {
+// Interpreter/tmux startup is slow when the whole suite runs in parallel, so allow generous time.
+describe.skipIf(!tmux)("terminal tool (tmux)", { timeout: 60_000 }, () => {
   it("drives a Python REPL: start, type, read the screen", async () => {
     const term = manager();
     const started = await term.execute({ action: "start", command: "python3 -q", session: "py" });
@@ -31,10 +32,16 @@ describe.skipIf(!tmux)("terminal tool (tmux)", () => {
   it("reports when the program exits, with its exit code", async () => {
     const term = manager();
     await term.execute({ action: "start", command: "python3 -q", session: "py" });
-    const exited = await term.execute({ action: "send", session: "py", text: "import sys; sys.exit(3)", keys: ["Enter"], wait_ms: 3000 });
-    expect(exited.alive).toBe(false);
-    expect(exited.exitCode).toBe(3);
-    expect(exited.note).toContain("exited");
+    await term.execute({ action: "send", session: "py", text: "import sys; sys.exit(3)", keys: ["Enter"] });
+    // Interpreter startup can be slow on a loaded machine; a model would simply read again, so poll.
+    let state = await term.execute({ action: "read", session: "py" });
+    for (let i = 0; i < 40 && state.alive; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      state = await term.execute({ action: "read", session: "py" });
+    }
+    expect(state.alive).toBe(false);
+    expect(state.exitCode).toBe(3);
+    expect(state.note).toContain("exited");
   });
 
   it("answers interactive prompts (a program that reads stdin)", async () => {
@@ -80,6 +87,14 @@ describe.skipIf(!tmux)("terminal tool (tmux)", () => {
     await term.execute({ action: "start", command: "cat", session: "x" });
     term.dispose();
     await expect(term.execute({ action: "read", session: "x" })).rejects.toThrow(/no terminal session/);
+  });
+});
+
+describe("exit marker parsing", () => {
+  it("reads the last marker on the screen", () => {
+    expect(exitCodeFromScreen("output\n[process exited with code 3]")).toBe(3);
+    expect(exitCodeFromScreen("[process exited with code 0]\nmore\n[process exited with code 127]\n")).toBe(127);
+    expect(exitCodeFromScreen("still running")).toBeNull();
   });
 });
 

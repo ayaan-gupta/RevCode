@@ -18,7 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { DynoCategory, DynoTask, GradeResult } from "../types.js";
-import { BUILTIN_SUITE, getTask, selectTasks } from "./index.js";
+import { BUILTIN_SUITE, SERIAL_TASK_IDS, getTask, selectTasks } from "./index.js";
 import { git, httpGetWithRetry, killListeners, listFiles, pythonCode, run, startDetached, treeDigest, withPortLock, writeFiles } from "./helpers.js";
 import { SERVE_PORT } from "./tasks/multi-serve-manifest.js";
 
@@ -36,7 +36,7 @@ function freshDir(): string {
  * Tasks whose grade needs a live process on a fixed port. Their pipelines must
  * not overlap with each other, nor with another process running this same file.
  */
-const PORT_TASKS = new Set(["multi-step-serve-manifest"]);
+const PORT_TASKS = SERIAL_TASK_IDS;
 
 let exclusiveTail: Promise<unknown> = Promise.resolve();
 function exclusive<T>(fn: () => Promise<T>): Promise<T> {
@@ -473,9 +473,103 @@ const WRONG_SOLUTIONS: WrongSolution[] = [
   },
 ];
 
+// ---------------------------------------------------------------------------
+// Valid alternative solutions: graders must not demand the oracle's exact shape
+// ---------------------------------------------------------------------------
+
+const ALTERNATIVE_SOLUTIONS: WrongSolution[] = [
+  {
+    task: "edit-big-file-constant",
+    name: "writes the number with digit separators",
+    apply: async (dir, task) => {
+      await task.oracle(dir);
+      editFile(dir, "inventory/registry.py", (text) => text.replace("RETRY_CEILING_MS = 9000", "RETRY_CEILING_MS = 9_000"));
+    },
+  },
+  {
+    task: "edit-tricky-characters",
+    name: "uses \\t escapes and a single-quoted footer",
+    apply: async (dir, task) => {
+      await task.oracle(dir);
+      editFile(dir, "receipts/templates.py", (text) =>
+        text
+          .replace('ITEM_ROW = "{sku}\t{qty}×\t{name}\t{price}\\n"', 'ITEM_ROW = "{sku}\\t{qty}×\\t{name}\\t{price}\\n"')
+          .replace('FOOTER = "Paid via \\"{method}\\" → D:\\\\Archive\\\\{id}.pdf\\n"', "FOOTER = 'Paid via \"{method}\" → D:\\\\Archive\\\\{id}.pdf\\n'"),
+      );
+    },
+  },
+  {
+    task: "edit-crlf-preserve",
+    name: "writes the new key without spaces around =",
+    apply: async (dir, task) => {
+      await task.oracle(dir);
+      editFile(dir, "deploy/service.ini", (text) => text.replace("pool_timeout = 30", "pool_timeout=30"));
+    },
+  },
+  {
+    task: "implement-csv-aggregator-cli",
+    name: "prints indented JSON with sorted keys at every level",
+    apply: async (dir, task) => {
+      await task.oracle(dir);
+      editFile(dir, "aggregate.py", (text) =>
+        text.replace('print(json.dumps({"groups": result, "skipped": skipped}))', 'print(json.dumps({"groups": result, "skipped": skipped}, sort_keys=True, indent=2))'),
+      );
+    },
+  },
+  {
+    task: "shell-batch-csv-script",
+    name: "script that delegates to a python3 heredoc",
+    apply: async (dir) => {
+      writeFiles(dir, {
+        "process.sh": [
+          "#!/usr/bin/env bash",
+          "set -eu",
+          "cd \"$(dirname \"$0\")\"",
+          "python3 - <<'PY'",
+          "import csv, pathlib, shutil",
+          "out = pathlib.Path('outgoing')",
+          "shutil.rmtree(out, ignore_errors=True)",
+          "out.mkdir()",
+          "manifest = []",
+          "for src in sorted(pathlib.Path('incoming').glob('*.csv'), key=lambda p: p.name.encode()):",
+          "    with open(src, newline='') as fh:",
+          "        rows = [r for r in csv.reader(fh) if r][1:]",
+          "    kept = sorted((r for r in rows if r[2] == 'active'), key=lambda r: (r[1].lower(), int(r[0])))",
+          "    with open(out / src.name, 'w', newline='') as fh:",
+          "        w = csv.writer(fh, lineterminator='\\n')",
+          "        w.writerow(['id', 'name', 'amount'])",
+          "        w.writerows([r[0], r[1], r[3]] for r in kept)",
+          "    manifest.append(f'{src.name},{len(kept)}')",
+          "(out / 'MANIFEST.txt').write_text(''.join(line + '\\n' for line in manifest))",
+          "PY",
+          "",
+        ].join("\n"),
+      });
+      const result = await run("bash", ["process.sh"], { cwd: dir, timeoutMs: 20_000 });
+      if (result.code !== 0) throw new Error(result.stderr);
+    },
+  },
+  {
+    task: "multi-step-git-feature-branch",
+    name: "adds a body to the commit message",
+    apply: async (dir, task) => {
+      await task.oracle(dir);
+      await git(["commit", "--amend", "--quiet", "-m", "Raise default rate limit to 250", "-m", "Requested by the platform team."], { cwd: dir });
+    },
+  },
+  {
+    task: "shell-log-incident-search",
+    name: "gives an absolute path and pads the values",
+    apply: async (dir, task) => {
+      await task.oracle(dir);
+      editFile(dir, "findings.txt", (text) => text.replace("file: logs/", `file:   ${dir}/logs/`).replace("count: 6", "count:  6  "));
+    },
+  },
+];
+
 const wrongResults = new Map<string, Promise<GradeResult>>();
 
-async function attemptWrongSolution(wrong: WrongSolution): Promise<GradeResult> {
+async function attempt(wrong: WrongSolution): Promise<GradeResult> {
   const task = getTask(wrong.task);
   if (!task) throw new Error(`unknown task ${wrong.task}`);
   const dir = freshDir();
@@ -484,7 +578,7 @@ async function attemptWrongSolution(wrong: WrongSolution): Promise<GradeResult> 
   return task.grade(dir);
 }
 
-const wrongKey = (wrong: WrongSolution): string => `${wrong.task}: ${wrong.name}`;
+const attemptKey = (wrong: WrongSolution): string => `${wrong.task}: ${wrong.name}`;
 
 // ---------------------------------------------------------------------------
 
@@ -493,9 +587,9 @@ beforeAll(() => {
     validations.set(task.id, PORT_TASKS.has(task.id) ? exclusive(() => validate(task)) : validate(task));
   }
   for (const task of bugfixTasks) cheatResults.set(task.id, attemptCheats(task));
-  for (const wrong of WRONG_SOLUTIONS) {
-    const run = () => attemptWrongSolution(wrong);
-    wrongResults.set(wrongKey(wrong), PORT_TASKS.has(wrong.task) ? exclusive(run) : run());
+  for (const wrong of [...WRONG_SOLUTIONS, ...ALTERNATIVE_SOLUTIONS]) {
+    const go = () => attempt(wrong);
+    wrongResults.set(attemptKey(wrong), PORT_TASKS.has(wrong.task) ? exclusive(go) : go());
   }
 });
 
@@ -535,6 +629,11 @@ describe("suite registry", () => {
     const hard = BUILTIN_SUITE.filter((task) => task.difficulty >= 2).length;
     expect(hard).toBeGreaterThanOrEqual(8);
     expect(BUILTIN_SUITE.some((task) => task.difficulty === 3)).toBe(true);
+  });
+
+  it("flags only real tasks as serial", () => {
+    expect([...SERIAL_TASK_IDS].every((id) => getTask(id) !== undefined)).toBe(true);
+    expect(SERIAL_TASK_IDS.has("multi-step-serve-manifest")).toBe(true);
   });
 
   it("looks tasks up by id", () => {
@@ -605,13 +704,20 @@ describe.each(bugfixTasks.map((task) => [task.id, task] as const))("cheat resist
 });
 
 describe("graders reject plausible wrong solutions", () => {
-  it.each(WRONG_SOLUTIONS.map((wrong) => [wrongKey(wrong), wrong] as const))("%s", async (key) => {
+  it.each(WRONG_SOLUTIONS.map((wrong) => [attemptKey(wrong), wrong] as const))("%s", async (key) => {
     const result = await (wrongResults.get(key) as Promise<GradeResult>);
     expect(result.passed, result.detail).toBe(false);
   });
 
   it("only targets tasks that exist", () => {
-    for (const wrong of WRONG_SOLUTIONS) expect(getTask(wrong.task), wrong.task).toBeDefined();
+    for (const wrong of [...WRONG_SOLUTIONS, ...ALTERNATIVE_SOLUTIONS]) expect(getTask(wrong.task), wrong.task).toBeDefined();
+  });
+});
+
+describe("graders accept valid alternative solutions", () => {
+  it.each(ALTERNATIVE_SOLUTIONS.map((alternative) => [attemptKey(alternative), alternative] as const))("%s", async (key) => {
+    const result = await (wrongResults.get(key) as Promise<GradeResult>);
+    expect(result.passed, result.detail).toBe(true);
   });
 });
 

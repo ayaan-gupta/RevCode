@@ -24,6 +24,7 @@ const ALIASES: Record<string, string[]> = {
   timeout: ["timeout_sec", "timeout_seconds", "timeout_ms"],
   oldText: ["old_text", "old_string", "old_str", "oldString", "old"],
   newText: ["new_text", "new_string", "new_str", "newString", "new"],
+  input: ["patch", "patch_text", "patchText", "diff"],
 };
 
 export interface NormalizeResult {
@@ -47,6 +48,20 @@ function normalizeObject(
   const props = schema.properties ?? {};
   const out: Record<string, unknown> = {};
   const remaining = { ...input };
+
+  // Models often flatten a single edit: { path, oldText, newText } instead of
+  // { path, edits: [{ oldText, newText }] }. Wrap it when the schema wants `edits`.
+  if (props.edits?.type === "array" && !("edits" in remaining)) {
+    const pick = (name: "oldText" | "newText"): string | undefined => [name, ...(ALIASES[name] ?? [])].find((key) => key in remaining);
+    const oldKey = pick("oldText");
+    const newKey = pick("newText");
+    if (oldKey && newKey) {
+      remaining.edits = [{ oldText: remaining[oldKey], newText: remaining[newKey] }];
+      delete remaining[oldKey];
+      delete remaining[newKey];
+      notes.push(`${prefix}oldText/newText wrapped into edits[0]`);
+    }
+  }
 
   // 1. Canonical keys first, then repair aliases for any that are missing.
   for (const name of Object.keys(props)) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseArgs, parseCommandLine, resolveArgs, defaultArgs } from "./cli.js";
+import { parseArgs, parseCommandLine, resolveArgs, defaultArgs, type CliArgs } from "./cli.js";
 import type { LoadedConfig } from "./config/config.js";
 
 const noConfig: LoadedConfig = { config: {}, warnings: [], files: [] };
@@ -70,5 +70,14 @@ describe("resolveArgs", () => {
     expect(headless.maxIterations).toBe(300);
     expect(headless.timeBudgetSec).toBe(900);
     expect(headless.snapshot).toBe(true);
+  });
+
+  it("implies a default model from the provider, and demands one where there is no sensible default", () => {
+    const withProvider = (provider: CliArgs["provider"], model?: string) =>
+      resolveArgs({ ...defaultArgs(), provider, ...(model ? { model, explicit: ["provider", "model"] } : { explicit: ["provider"] }) }, noConfig, {});
+    expect(withProvider("anthropic").model).toBe("claude-sonnet-5-5");
+    expect(withProvider("anthropic", "claude-opus-5-5").model).toBe("claude-opus-5-5");
+    expect(() => withProvider("ollama")).toThrow(/needs a model/);
+    expect(withProvider("ollama", "qwen2.5-coder").model).toBe("qwen2.5-coder");
   });
 });

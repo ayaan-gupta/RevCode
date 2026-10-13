@@ -50,6 +50,13 @@ export const BUILTIN_SUITE: DynoTask[] = [
   shellLogIncidentSearch,
 ];
 
+/**
+ * Tasks that bind a fixed TCP port and whose grader kills whatever listens on it.
+ * Two attempts at one of these must never overlap, so a runner with concurrency
+ * above 1 has to run them one at a time.
+ */
+export const SERIAL_TASK_IDS: ReadonlySet<string> = new Set([multiStepServeManifest.id]);
+
 export function getTask(id: string): DynoTask | undefined {
   return BUILTIN_SUITE.find((task) => task.id === id);
 }

@@ -361,7 +361,7 @@ export const applyPatchToolDefinition: ToolDefinition = {
     properties: {
       input: {
         type: "string",
-        description: "The entire patch text, from '*** Begin Patch' to '*** End Patch'.",
+        description: "The whole patch: '*** Begin Patch', file sections (*** Add/Update/Delete File: path), '*** End Patch'.",
       },
     },
     required: ["input"],

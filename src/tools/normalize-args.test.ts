@@ -73,4 +73,18 @@ describe("normalizeToolArgs", () => {
     const explicit = { type: "object", properties: { query: { type: "string" } }, additionalProperties: true };
     expect(normalizeToolArgs({ query: "x", extra: 1 }, explicit).args).toEqual({ query: "x", extra: 1 });
   });
+
+  it("wraps a flattened single edit into edits[0]", () => {
+    const { args, notes } = normalizeToolArgs({ file_path: "a.ts", old_string: "a", new_string: "b" }, editSchema);
+    expect(args).toEqual({ path: "a.ts", edits: [{ oldText: "a", newText: "b" }] });
+    expect(notes.join(" ")).toContain("wrapped into edits[0]");
+    // An explicit edits array is never overridden.
+    const kept = normalizeToolArgs({ path: "a.ts", edits: [{ oldText: "x", newText: "y" }], oldText: "z", newText: "w" }, editSchema);
+    expect((kept.args.edits as unknown[]).length).toBe(1);
+  });
+
+  it("maps patch aliases to apply_patch's input parameter", () => {
+    const patchSchema = { type: "object", properties: { input: { type: "string" } }, required: ["input"], additionalProperties: false };
+    expect(normalizeToolArgs({ patch: "*** Begin Patch" }, patchSchema).args).toEqual({ input: "*** Begin Patch" });
+  });
 });

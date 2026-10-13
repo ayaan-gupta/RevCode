@@ -24,6 +24,9 @@ const TIPS = [
   "Type /help for commands.",
 ] as const;
 
+/** Tools whose results carry a unified diff worth coloring. */
+const DIFF_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit_file", "apply_patch", "edit_anchored"]);
+
 const INPUT_HINT = "Type your message or @path/to/file";
 const CHEVRON = ">";
 
@@ -175,7 +178,7 @@ export class TerminalRenderer {
   }
 
   toolResult(name: string, result: unknown): void {
-    const diff = name === "write_file" || name === "edit_file" ? extractDiff(result) : undefined;
+    const diff = DIFF_TOOLS.has(name) ? extractDiff(result) : undefined;
     if (diff) {
       console.log(renderDiff(diff, this.rich));
       return;

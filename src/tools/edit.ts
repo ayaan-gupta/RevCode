@@ -117,10 +117,10 @@ export function applyEdits(
 
     const found = locate(content, request.oldText);
     if (found === undefined) {
-      throw new EditError(`${label}${describeNotFound(filePath, content, edit.oldText)}`);
+      throw new EditError(`${label}${describeNotFound(filePath, content, request.oldText, unprefixed !== undefined)}`);
     }
     if (found.spans.length > 1 && edit.replaceAll !== true) {
-      throw new EditError(`${label}${describeAmbiguous(filePath, content, found.spans)}`);
+      throw new EditError(`${label}${describeAmbiguous(filePath, content, found.spans, found.tier)}`);
     }
 
     let reindented = false;
@@ -323,6 +323,15 @@ function* occurrences(content: string, text: string): Generator<Span> {
   }
 }
 
+const WORD_CHAR = /[\p{L}\p{N}_]/u;
+
+/** A loose substring match must not start or end in the middle of an identifier. */
+function atWordBoundaries(content: string, start: number, end: number): boolean {
+  const insideWord = (inner: string | undefined, outer: string | undefined): boolean =>
+    inner !== undefined && outer !== undefined && WORD_CHAR.test(inner) && WORD_CHAR.test(outer);
+  return !insideWord(content[start], content[start - 1]) && !insideWord(content[end - 1], content[end]);
+}
+
 const exactTier: Tier = {
   name: "exact",
   explanation: "exactly",
@@ -366,6 +375,11 @@ const lineTrimmedTier: Tier = {
   },
 };
 
+/** Opening and closing lines must carry enough text that matching them means something (not just `{` and `}`). */
+function usableAnchors(first: string, last: string): boolean {
+  return first !== "" && last !== "" && first.length + last.length >= 6;
+}
+
 /** Opening and closing lines match; the lines between may differ (a typo, a stale detail). */
 const blockAnchorTier: Tier = {
   name: "block-anchor",
@@ -376,7 +390,7 @@ const blockAnchorTier: Tier = {
     if (search.length < 3) return;
     const first = search[0].trim();
     const last = search[search.length - 1].trim();
-    if (first === "" || last === "") return;
+    if (!usableAnchors(first, last)) return;
 
     const trimmed = ctx.trimmed;
     const tolerance = Math.max(3, Math.ceil(search.length * 0.5));
@@ -431,13 +445,14 @@ const whitespaceNormalizedTier: Tier = {
     for (let i = 0; i < lines.length; i += 1) {
       if (normalized[i] === wanted) {
         yield ctx.window(i, i + 1);
-      } else if (normalized[i].includes(wanted)) {
+      } else if (normalized[i].includes(wanted) && wanted.includes(" ")) {
         // oldText is a fragment of one line: locate it with flexible spacing.
         const words = find.trim().split(/\s+/).map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
         const match = new RegExp(words.join("\\s+")).exec(lines[i]);
         if (match) {
           const start = ctx.lineStart(i) + match.index;
-          yield { start, end: start + match[0].length };
+          const end = start + match[0].length;
+          if (atWordBoundaries(ctx.content, start, end)) yield { start, end };
         }
       }
     }
@@ -505,7 +520,9 @@ const trimmedBoundaryTier: Tier = {
   *spans(ctx, find) {
     const core = find.trim();
     if (core === find || core === "") return;
-    yield* occurrences(ctx.content, core);
+    for (const span of occurrences(ctx.content, core)) {
+      if (atWordBoundaries(ctx.content, span.start, span.end)) yield span;
+    }
 
     const size = find.split("\n").length;
     const lines = ctx.lines;
@@ -528,7 +545,7 @@ const contextAwareTier: Tier = {
     const trimmed = ctx.trimmed;
     const first = search[0].trim();
     const last = search[search.length - 1].trim();
-    if (first === "" || last === "") return;
+    if (!usableAnchors(first, last)) return;
 
     for (let i = 0; i + search.length <= trimmed.length; i += 1) {
       const end = i + search.length - 1;
@@ -737,7 +754,7 @@ function convertIndent(line: string, fileUsesTabs: boolean, size: number): strin
 const PREVIEW_COLUMNS = 120;
 const MAX_LISTED_MATCHES = 5;
 
-function describeNotFound(filePath: string, content: string, oldText: string): string {
+function describeNotFound(filePath: string, content: string, oldText: string, hadPrefixes: boolean): string {
   if (content.trim() === "") {
     return `Could not find oldText in ${filePath}: the file is empty. Use write_file to put content in it.`;
   }
@@ -755,29 +772,25 @@ function describeNotFound(filePath: string, content: string, oldText: string): s
     lines.push(`Nothing in the file is similar to oldText (closest is ${percent}% similar, at line ${closest.line}); the file may not contain what you expect.`);
   }
 
-  if (hasLineNumberPrefixes(oldText)) {
-    lines.push("oldText starts each line with a line-number prefix such as `12|` or `12#AB:` copied from read_file output. Those prefixes are not part of the file: remove them.");
+  if (hadPrefixes) {
+    lines.push("oldText started each line with a line-number prefix such as `12|` or `12#AB:` copied from read_file output. Those prefixes are not part of the file; they were ignored here, and the text without them was not found either.");
   }
   lines.push("Re-read the file with read_file and copy the text exactly (whitespace and indentation included). Prefer a shorter oldText that is still unique.");
   return lines.join("\n");
-}
-
-function hasLineNumberPrefixes(text: string): boolean {
-  const lines = text.split("\n").filter((line) => line.trim() !== "");
-  return lines.length > 0 && lines.every((line) => /^\s*\d+\s*(\||#[A-Z]{2}:|:\s)/.test(line));
 }
 
 function clip(line: string): string {
   return line.length > PREVIEW_COLUMNS ? `${line.slice(0, PREVIEW_COLUMNS)}…` : line;
 }
 
-function describeAmbiguous(filePath: string, content: string, spans: readonly Span[]): string {
+function describeAmbiguous(filePath: string, content: string, spans: readonly Span[], tier: Tier): string {
   const lines = content.split("\n");
   const lineOf = (offset: number): number => content.slice(0, offset).split("\n").length;
   const shown = spans.slice(0, MAX_LISTED_MATCHES);
+  const loose = tier.name === "exact" ? "" : ` (oldText does not occur verbatim; these matched ${tier.explanation})`;
   const header =
-    `Found ${spans.length} matches for oldText in ${filePath}` +
-    `${spans.length > shown.length ? ` (showing the first ${shown.length})` : ""}. ` +
+    `Found ${spans.length} matches for oldText in ${filePath}${loose}` +
+    `${spans.length > shown.length ? `, showing the first ${shown.length}` : ""}. ` +
     "Include more surrounding lines in oldText so it identifies exactly one location, or set replaceAll to true to change every occurrence.";
 
   const previews = shown.map((span, index) => {

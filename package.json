@@ -1,7 +1,7 @@
 {
   "name": "revcode",
   "version": "0.1.0",
-  "description": "AI-powered coding agent for the terminal",
+  "description": "AI-powered coding agent for the terminal — Parallel Universes and self-tuning (Dyno)",
   "main": "dist/index.js",
   "bin": {
     "revcode": "dist/index.js"
@@ -12,14 +12,19 @@
     "dev": "tsx src/index.ts",
     "lint": "eslint src/",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
   },
   "keywords": [
-    "ai",
-    "coding",
     "agent",
-    "terminal",
-    "cli"
+    "ai",
+    "cli",
+    "coding",
+    "harness",
+    "llm",
+    "mcp",
+    "parallel-universes",
+    "terminal"
   ],
   "license": "MIT",
   "engines": {
@@ -37,5 +42,12 @@
   },
   "dependencies": {
     "figlet": "^1.11.0"
-  }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "docs"
+  ]
 }

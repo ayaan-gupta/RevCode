@@ -5,7 +5,8 @@
  * Myers O(ND) line diff. Results go straight back to the model and the TUI, so
  * a one-line edit to a 2,000-line file must cost a handful of lines, not 4,000.
  * The similarity helpers back the "closest match" diagnostics that the edit
- * tools emit when a model's expected text is not in the file.
+ * tools emit when a model's expected text is not in the file (an idea from
+ * can1357/oh-my-pi, MIT; the implementation here is independent).
  */
 
 export interface DiffOptions {

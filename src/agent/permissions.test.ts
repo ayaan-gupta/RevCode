@@ -88,6 +88,22 @@ describe("ruleMatches", () => {
     expect(ruleMatches("shell(git *)", "shell", "git status")).toBe(true);
     expect(ruleMatches("shell(git *)", "shell", "ls")).toBe(false);
     expect(ruleMatches("mcp__*", "mcp__a__b", undefined)).toBe(true);
-    expect(ruleMatches("edit_file(src/**)", "write_file", "src/a")).toBe(false);
+    // The file-editing tools are one family, so a rule for one covers them all.
+    expect(ruleMatches("edit_file(src/**)", "write_file", "src/a")).toBe(true);
+    expect(ruleMatches("edit_file(src/**)", "shell", "src/a")).toBe(false);
+    expect(ruleMatches("shell(git *)", "write_file", "git x")).toBe(false);
+  });
+
+  it("covers apply_patch (several files) and the whole edit-tool family in rules", () => {
+    const patch = (files: string[]) => ({ input: `*** Begin Patch\n${files.map((f) => `*** Update File: ${f}\n@@\n-a\n+b`).join("\n")}\n*** End Patch` });
+    const deny = make("yolo", { deny: ["edit_file(src/secret*)"] });
+    expect(deny.evaluate("apply_patch", patch(["src/ok.ts", "src/secret.ts"])).action).toBe("deny");
+    expect(deny.evaluate("write_file", { path: "src/secret.txt" }).action).toBe("deny");
+    expect(deny.evaluate("apply_patch", patch(["src/ok.ts"])).action).toBe("allow");
+
+    // An allow rule needs EVERY touched file to match.
+    const allow = make("ask", { allow: ["edit_file(src/**)"] });
+    expect(allow.evaluate("apply_patch", patch(["src/a.ts", "src/b.ts"])).action).toBe("allow");
+    expect(allow.evaluate("apply_patch", patch(["src/a.ts", "lib/b.ts"])).action).toBe("ask");
   });
 });

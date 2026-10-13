@@ -18,6 +18,17 @@ import { PERMISSION_MODES, type PermissionMode } from "./agent/permissions.js";
 
 export const DEFAULT_MODEL = "glm-5.2";
 
+/**
+ * Model to use when the user picked a provider but not a model. Only providers with a
+ * sensible fixed default are listed; for the rest (openai, openrouter, ollama,
+ * openai-compat) the right model depends on what the user has, so we ask for one.
+ */
+export const PROVIDER_DEFAULT_MODELS: Partial<Record<LlmProvider, string>> = {
+  zai: "glm-5.2",
+  anthropic: "claude-sonnet-5-5",
+  "local-test": "test",
+};
+
 export type OutputFormat = "text" | "json" | "stream-json";
 
 export interface CliArgs {
@@ -309,7 +320,7 @@ function parseFlags(
 
 function finishTune(raw: Partial<TuneOptions>): TuneOptions {
   return {
-    budget: raw.budget ?? 60,
+    budget: raw.budget ?? 200,
     trials: raw.trials ?? 1,
     tasks: raw.tasks,
     categories: raw.categories,
@@ -363,6 +374,15 @@ export function resolveArgs(args: CliArgs, loaded: LoadedConfig, env: NodeJS.Pro
 
   if (!explicit.has("model") && config.model) out.model = config.model;
   if (!explicit.has("provider") && config.provider && isLlmProvider(config.provider)) out.provider = config.provider;
+  if (!explicit.has("model") && !config.model && out.provider) {
+    const implied = PROVIDER_DEFAULT_MODELS[out.provider];
+    if (implied) {
+      out.model = implied;
+    } else if (!out.headless || !out.prompt) {
+      // Interactive start with e.g. --provider ollama and no model: fail early with a useful message.
+      throw new Error(`--provider ${out.provider} needs a model: pass --model <name> (or set "model" in .revcode/config.json).`);
+    }
+  }
   if (!explicit.has("baseUrl") && config.baseUrl) out.baseUrl = config.baseUrl;
   if (!explicit.has("maxIterations")) {
     out.maxIterations = config.maxIterations ?? (out.headless ? 300 : 100);

@@ -26,6 +26,17 @@ const SETTLE_MS = 350;
 const DEFAULT_WAIT_MS = 2_000;
 const MAX_WAIT_MS = 30_000;
 const MAX_SCREEN_CHARS = 12_000;
+/** How long to wait for a dead pane's exit code before giving up (normally a few ms). */
+const EXIT_STATUS_WAIT_MS = 8_000;
+
+/**
+ * The program runs inside a wrapper that prints its own exit code as the last line.
+ * tmux does expose `pane_dead_status`, but only after its event loop has drained the
+ * pane, which can lag by seconds on a loaded machine; the printed marker is
+ * available the moment the program exits.
+ */
+const EXIT_MARKER = "[process exited with code ";
+const EXIT_WRAPPER = `bash -c "$1"; rc=$?; printf '\\n${EXIT_MARKER}%d]\\n' "$rc"; exit "$rc"`;
 
 export interface TerminalInput {
   action: "start" | "send" | "read" | "kill" | "list";
@@ -91,7 +102,7 @@ export class TerminalManager {
     const command = input.command?.trim() || "bash --norc --noprofile -i";
     await this.tmux([
       "new-session", "-d", "-s", name, "-x", String(DEFAULT_WIDTH), "-y", String(DEFAULT_HEIGHT), "-c", this.cwd,
-      "env", "TERM=xterm-256color", "PS1=$ ", "bash", "-c", command,
+      "env", "TERM=xterm-256color", "PS1=$ ", "bash", "-c", EXIT_WRAPPER, "_", command,
     ]);
     this.serverStarted = true;
     this.sessions.add(name);
@@ -149,7 +160,21 @@ export class TerminalManager {
       }
     }
 
-    const state = await this.paneState(name);
+    let state = await this.paneState(name);
+    if (state.dead) {
+      // tmux marks a pane dead the moment the child is reaped, but may not have drained the
+      // pty yet — so the final screen (with the exit marker) and the exit status both arrive a
+      // little later, seconds later on a loaded machine. A dead pane's screen is final, so poll
+      // it until the exit code shows up, bounded so a pathological case can't hang the tool.
+      const exitDeadline = Date.now() + EXIT_STATUS_WAIT_MS;
+      for (;;) {
+        screen = await this.capture(name, scrollback);
+        state = { dead: true, exitCode: state.exitCode ?? exitCodeFromScreen(screen) };
+        if (state.exitCode !== null || Date.now() >= exitDeadline) break;
+        await sleep(50);
+        state = await this.paneState(name);
+      }
+    }
     // A mostly empty terminal is 50 blank rows; collapse long blank runs to save tokens.
     const trimmed = clip(screen.replace(/\s+$/g, "").replace(/\n{4,}/g, "\n\n"));
     return {
@@ -170,24 +195,14 @@ export class TerminalManager {
   }
 
   private async paneState(name: string): Promise<{ dead: boolean; exitCode: number | null }> {
-    // tmux flips pane_dead a moment before it records the exit status, so when the
-    // pane is dead but the status is still empty, give it a few short retries.
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      try {
-        const { stdout } = await this.tmux(["display-message", "-p", "-t", name, "#{pane_dead} #{pane_dead_status}"]);
-        const [dead, status] = stdout.trim().split(" ");
-        if (dead !== "1") {
-          return { dead: false, exitCode: null };
-        }
-        if (status !== undefined && status !== "") {
-          return { dead: true, exitCode: Number(status) };
-        }
-      } catch {
-        return { dead: true, exitCode: null };
-      }
-      await sleep(60);
+    try {
+      const { stdout } = await this.tmux(["display-message", "-p", "-t", name, "#{pane_dead} #{pane_dead_status}"]);
+      const [dead, status] = stdout.trim().split(" ");
+      const isDead = dead === "1";
+      return { dead: isDead, exitCode: isDead && status !== undefined && status !== "" ? Number(status) : null };
+    } catch {
+      return { dead: true, exitCode: null };
     }
-    return { dead: true, exitCode: null };
   }
 
   private requireSession(session: string | undefined): string {
@@ -222,6 +237,13 @@ export class TerminalManager {
     this.sessions.clear();
     this.serverStarted = false;
   }
+}
+
+/** Exit code from the wrapper's last-line marker, if the program has finished. */
+export function exitCodeFromScreen(screen: string): number | null {
+  const matches = [...screen.matchAll(/\[process exited with code (\d+)\]/g)];
+  const last = matches.at(-1);
+  return last ? Number(last[1]) : null;
 }
 
 function sessionName(session: string | undefined): string {

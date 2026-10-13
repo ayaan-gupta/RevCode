@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -128,6 +128,50 @@ describe("createRuntime", () => {
     expect(switched.profileSource).toBe("tuned");
     expect(rt.profile.promptStyle).toBe("terse");
     expect(rt.engine.messages[0].content.length).toBeLessThan(before);
+  });
+});
+
+describe("hooks integration", () => {
+  function writeHooks(hooks: unknown): void {
+    writeFileSync(path.join(process.env.REVCODE_HOME as string, "hooks.json"), JSON.stringify({ hooks }));
+  }
+
+  it("a PreToolUse hook that says ask forces a prompt even in yolo mode", async () => {
+    writeHooks({
+      PreToolUse: [
+        {
+          matcher: "shell",
+          hooks: [{ type: "command", command: `echo '{"hookSpecificOutput":{"permissionDecision":"ask"}}'` }],
+        },
+      ],
+    });
+    const asked: string[] = [];
+    const llm = new ScriptedLlm([toolCall("shell", { command: "echo hi" }), say("done")]);
+    const rt = await createRuntime({
+      args: args({ permissionMode: "yolo", mcp: false, snapshot: false }),
+      interactive: true,
+      llm,
+      hermetic: false,
+      approver: async (request) => {
+        asked.push(request.reason);
+        return "allow";
+      },
+    });
+    runtimes.push(rt);
+    await rt.engine.runTurn("run it");
+    expect(asked).toEqual(["A hook requires confirmation."]);
+    expect(rt.engine.messages.find((m) => m.role === "tool")?.content).toContain("hi");
+  });
+
+  it("a PreToolUse hook that blocks (exit 2) vetoes the tool and tells the model why", async () => {
+    writeHooks({ PreToolUse: [{ matcher: "write_file", hooks: [{ type: "command", command: "echo 'no writes to prod' >&2; exit 2" }] }] });
+    const llm = new ScriptedLlm([toolCall("write_file", { path: "x.txt", content: "no" }), say("ok")]);
+    const rt = await createRuntime({ args: args({ permissionMode: "yolo", mcp: false, snapshot: false }), interactive: false, llm });
+    runtimes.push(rt);
+    await rt.engine.runTurn("write");
+    const tool = rt.engine.messages.find((m) => m.role === "tool");
+    expect(tool?.content).toContain("no writes to prod");
+    expect(existsSync(path.join(project, "x.txt"))).toBe(false);
   });
 });
 

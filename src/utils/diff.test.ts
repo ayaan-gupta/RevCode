@@ -203,7 +203,7 @@ describe("generateDiff", () => {
     const diff = generateDiff(`${long}\n`, `${long}y\n`, "min.js");
     expect(diff.length).toBeLessThan(2_000);
     expect(diff).toContain("-" + "x".repeat(500) + "… [999500 more characters]");
-    expect(diff).toContain("[1000001 more characters]".replace("1000001", "500501"));
+    expect(diff).toContain("[999501 more characters]");
   });
 
   it("honors a custom context size and line cap", () => {

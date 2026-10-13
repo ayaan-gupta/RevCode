@@ -16,10 +16,11 @@ const ORIGINAL_CEILING = 4000;
 const NEW_CEILING = 9000;
 const RULE_COUNT = 178;
 const RETRY_SECTION_AFTER = 88;
+const CAPPED_AT_CEILING_ROW = 31;
 const MODULE = "inventory/registry.py";
 
 /** The generated module, parameterised on the one value the task changes. */
-export function renderRegistry(ceiling: number): string {
+function renderRegistry(ceiling: number): string {
   const rng = makeRng(20240611);
   const out: string[] = [
     String.raw`"""Pricing-rule registry for the inventory service.
@@ -45,7 +46,9 @@ def register(key):
 
   for (let n = 1; n <= RULE_COUNT; n++) {
     const key = `rule_${String(n).padStart(3, "0")}`;
-    const shape = rng.int(0, 4);
+    // Row 31 is always a capped rule: its cap deliberately equals the retry ceiling's old value.
+    const drawn = rng.int(0, 4);
+    const shape = n === CAPPED_AT_CEILING_ROW ? 2 : drawn;
     out.push("", `@register("${key}")`, `def ${key}(qty, unit_cents):`);
     if (shape === 0) {
       const pct = rng.int(2, 15);
@@ -71,7 +74,7 @@ def register(key):
       );
     } else if (shape === 2) {
       // One rule deliberately caps at the same number as the retry ceiling.
-      const cap = n === 31 ? ORIGINAL_CEILING : rng.int(1500, 9500);
+      const cap = n === CAPPED_AT_CEILING_ROW ? ORIGINAL_CEILING : rng.int(1500, 9500);
       const fee = rng.int(50, 600);
       out.push(
         `    """Row ${n}: flat fee of ${fee} cents, capped at ${cap}."""`,

@@ -104,16 +104,24 @@ export function formatTuneProgress(event: TuneEvent): string | undefined {
 
 export function formatDryRun(tasks: DynoTask[], trials: number, budget: number, editModes: readonly string[]): string[] {
   const perFull = tasks.length * trials;
-  return [
+  // Baseline + confirm (two full suites) are fixed costs; every candidate then costs one screen.
+  const screenGuess = Math.min(tasks.length, Math.max(4, Math.ceil(tasks.length / 2))) * trials;
+  const fixed = perFull + 2 * perFull;
+  const candidates = Math.max(0, Math.floor((budget - fixed) / screenGuess));
+  const lines = [
     `Suite: ${tasks.length} task(s) × ${trials} trial(s) = ${perFull} run(s) per full evaluation.`,
     `Edit modes in play: ${editModes.join(", ")}`,
     "Plan:",
     `  1. Baseline with the default profile: ${perFull} runs (stops here if the model already passes ≥95%).`,
-    "  2. Try one knob at a time on a screen of the failed tasks plus a few passing ones.",
+    `  2. Try one knob at a time on a screen of ~${screenGuess} run(s) per candidate (the failed tasks plus a few passing ones).`,
     `  3. Confirm the winner against a fresh baseline: ${2 * perFull} runs.`,
-    `Budget: ${budget} runs. Tasks: ${tasks.map((t) => t.id).join(", ")}`,
-    "No model calls were made (--dry-run).",
+    `Budget: ${budget} runs → roughly ${candidates} candidate(s) can be tried after the ${fixed} fixed runs.`,
   ];
+  if (candidates < 6) {
+    lines.push(`  ! That is a thin search (about 11 candidates exist). Raise --budget to ~${fixed + 11 * screenGuess} for a full pass.`);
+  }
+  lines.push(`Tasks: ${tasks.map((t) => t.id).join(", ")}`, "No model calls were made (--dry-run).");
+  return lines;
 }
 
 function formatTokens(n: number): string {

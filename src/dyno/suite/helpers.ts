@@ -43,7 +43,7 @@ export function stableStringify(value: unknown): string {
  * replaced so the same failure always reads the same (grading must be repeatable).
  */
 export function clip(text: string, max = 400): string {
-  const flat = text.trim().replace(/\S*dyno-grade-\w{6}/g, "<scratch>");
+  const flat = text.trim().replace(/[^\s"'(]*dyno-grade-\w{6}/g, "<scratch>");
   return flat.length <= max ? flat : `${flat.slice(0, max)}…`;
 }
 

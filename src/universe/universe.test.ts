@@ -76,6 +76,17 @@ describe("Universe.create", () => {
     expect(existsSync(path.join(u.workDir, "__pycache__"))).toBe(false);
   });
 
+  it("never copies RevCode's own state directory, even when it lives inside the project", async () => {
+    const inside = mkdtempSync(path.join(os.tmpdir(), "revcode-self-"));
+    write(path.join(inside, "keep.txt"), "x");
+    process.env.REVCODE_HOME = path.join(inside, ".state");
+    mkdirSync(process.env.REVCODE_HOME, { recursive: true });
+    write(path.join(process.env.REVCODE_HOME, "sessions", "s.json"), "{}");
+    const u = await Universe.create({ projectRoot: inside });
+    expect(existsSync(path.join(u.workDir, "keep.txt"))).toBe(true);
+    expect(existsSync(path.join(u.workDir, ".state"))).toBe(false);
+  });
+
   it("refuses a filesystem root or home directory", async () => {
     await expect(Universe.create({ projectRoot: "/" })).rejects.toThrow(/Refusing/);
     await expect(Universe.create({ projectRoot: os.homedir() })).rejects.toThrow(/Refusing/);

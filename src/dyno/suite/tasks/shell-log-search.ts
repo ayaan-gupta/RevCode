@@ -90,7 +90,13 @@ function generateLogs(): GeneratedLogs {
   return { files, facts };
 }
 
-const GENERATED = generateLogs();
+let generated: GeneratedLogs | undefined;
+
+/** Built on first use so merely importing the suite stays cheap. */
+function logs(): GeneratedLogs {
+  generated ??= generateLogs();
+  return generated;
+}
 
 /** Parse `key: value` lines into a map; later duplicates win. */
 function parseFindings(text: string): Map<string, string> {
@@ -106,7 +112,7 @@ export const shellLogIncidentSearch: DynoTask = {
   id: "shell-log-incident-search",
   title: "Locate an error code in a tree of logs and report the facts",
   category: "shell",
-  difficulty: 2,
+  difficulty: 1,
   instruction:
     `Customers reported failed payouts this week. Somewhere under \`logs/\` (one directory per service, one file per day) ` +
     `there is an error with the code \`${TARGET_CODE}\`; other, similar-looking codes are in there too, so be exact. Find the ` +
@@ -119,14 +125,14 @@ export const shellLogIncidentSearch: DynoTask = {
   timeoutSec: 120,
 
   setup(dir) {
-    writeFiles(dir, GENERATED.files);
+    writeFiles(dir, logs().files);
   },
 
   grade(dir) {
     const text = readText(dir, "findings.txt");
     if (text === undefined) return fail("findings.txt does not exist");
     const found = parseFindings(text);
-    const { facts } = GENERATED;
+    const { facts } = logs();
 
     const rawFile = (found.get("file") ?? "").trim();
     const file = path.posix.normalize(rawFile.startsWith(dir) ? path.posix.relative(dir, rawFile) : rawFile);
@@ -138,7 +144,7 @@ export const shellLogIncidentSearch: DynoTask = {
     }
 
     // The logs are evidence: any change to them invalidates the answer.
-    for (const [relative, content] of Object.entries(GENERATED.files)) {
+    for (const [relative, content] of Object.entries(logs().files)) {
       if (readText(dir, relative) !== content) return fail(`${relative} was modified or removed`);
     }
     return pass(`identified ${facts.file} with count, first_seen and request_id`);

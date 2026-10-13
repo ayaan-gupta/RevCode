@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DynoTask } from "../../types.js";
-import { clip, fail, pass, python, withScratchCopy, writeFiles } from "../helpers.js";
+import { clip, fail, pass, python, stableStringify, withScratchCopy, writeFiles } from "../helpers.js";
 
 const README = `# aggregate.py
 
@@ -271,8 +271,10 @@ export const implementCsvAggregator: DynoTask = {
         const wantKeys = JSON.stringify(Object.keys(testCase.groups));
         const gotKeys = JSON.stringify(Object.keys(parsed.groups ?? {}));
         if (wantKeys !== gotKeys) return fail(`${testCase.name}: group keys ${gotKeys}, expected ${wantKeys}`);
+        // Key order inside a group is irrelevant (json.dumps(sort_keys=True) reorders it); the order of the groups is not.
         const same =
-          JSON.stringify(parsed.groups) === JSON.stringify(testCase.groups) && parsed.skipped === testCase.skipped;
+          Object.entries(testCase.groups).every(([key, group]) => stableStringify(parsed.groups?.[key]) === stableStringify(group)) &&
+          parsed.skipped === testCase.skipped;
         if (!same) {
           return fail(
             `${testCase.name}: got ${clip(JSON.stringify(parsed), 250)}, expected ${JSON.stringify({ groups: testCase.groups, skipped: testCase.skipped })}`,

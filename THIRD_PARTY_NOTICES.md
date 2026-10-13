@@ -270,10 +270,11 @@ SOFTWARE.
   Copyright (c) 2025 opencode.
 - The cascade's source file states that its approaches are "sourced from" Cline's
   `evals/diff-edits/diff-apply/diff-06-23-25.ts` and `diff-06-26-25.ts` (<https://github.com/cline/cline>) and Gemini
-  CLI's `packages/core/src/utils/editCorrector.ts` (<https://github.com/google-gemini/gemini-cli>). Both are
-  understood to be distributed under the Apache License 2.0, but their LICENSE files are not part of the reference
-  clones used for this port, so the license names are unverified and their copyright holders are NOT recorded here:
-  copy them from the upstream LICENSE files before a release.
+  CLI's `packages/core/src/utils/editCorrector.ts` (<https://github.com/google-gemini/gemini-cli>). Both upstream
+  projects are licensed under the Apache License 2.0, verified from their `LICENSE` files (October 2026): Cline's `LICENSE` states "Copyright 2026 Cline Bot Inc."; Gemini CLI's `LICENSE` is the unfilled
+  Apache text and its source files carry "Copyright 2025 Google LLC" (SPDX `Apache-2.0`). RevCode contains no code
+  copied from either project: the matching tiers were written independently in TypeScript from the rules OpenCode
+  documents, so this is attribution of lineage, not a license-compliance requirement for copied code.
 - Used in: `src/tools/edit.ts` (ordering and rules of the matching tiers, written independently in TypeScript, not
   copied) and the `read_file` conventions in `src/tools/read.ts` ("Did you mean" suggestions, continuation notice).
 - License text (verbatim from the upstream `LICENSE`):

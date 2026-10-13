@@ -123,6 +123,34 @@ describe("tuneProfile", () => {
     expect(outcome.improved).toBe(true);
   });
 
+  it("never runs serial-only tasks at the same time, even with parallel workers", async () => {
+    let active = 0;
+    let maxActive = 0;
+    const serialTasks = [task("port-a"), task("port-b"), task("port-c")];
+    const run: RunTaskFn = async (t) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      await new Promise((r) => setTimeout(r, 15));
+      active -= 1;
+      return result(t, true);
+    };
+    await tuneProfile({ tasks: serialTasks, runTask: run, concurrency: 3, serialTaskIds: new Set(["port-a", "port-b", "port-c"]) });
+    expect(maxActive).toBe(1);
+
+    // Without the constraint the same workload does overlap (proving the test can fail).
+    let overlap = 0;
+    active = 0;
+    const run2: RunTaskFn = async (t) => {
+      active += 1;
+      overlap = Math.max(overlap, active);
+      await new Promise((r) => setTimeout(r, 15));
+      active -= 1;
+      return result(t, true);
+    };
+    await tuneProfile({ tasks: serialTasks, runTask: run2, concurrency: 3 });
+    expect(overlap).toBeGreaterThan(1);
+  });
+
   it("only searches edit modes that are implemented", () => {
     expect(alternatives("editMode", DEFAULT_PROFILE, ["replace", "whole"])).toEqual(["whole"]);
     expect(alternatives("toolSchema", DEFAULT_PROFILE, [])).toEqual(["flat"]);

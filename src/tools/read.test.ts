@@ -248,6 +248,12 @@ describe("text codec", () => {
     expect(encodeText(decoded, "a\nb\nNEW\nc\nd\n")).toBe("a\r\nb\nNEW\nc\r\nd\r\n");
   });
 
+  it("restores mixed endings when LF dominates", () => {
+    const decoded = decodeText("a\nb\nc\r\nd\n");
+    expect(decoded.eol).toBe("\n");
+    expect(encodeText(decoded, "a\nB\nc\nd\ne\n")).toBe("a\nB\nc\r\nd\ne\n");
+  });
+
   it("loads files for editing and refuses the unsafe ones", async () => {
     const file = await put("a.txt", "﻿hi\r\n");
     const loaded = await loadTextFile(file, dir);

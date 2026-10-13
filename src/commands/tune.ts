@@ -12,7 +12,7 @@ import { saveStoredProfile } from "../harness/profile.js";
 import { AVAILABLE_EDIT_MODES } from "../tools/edit-modes.js";
 import { formatDryRun, formatTuneProgress, renderLiftCard } from "../dyno/report.js";
 import { runDynoTask } from "../dyno/runner.js";
-import { selectTasks } from "../dyno/suite/index.js";
+import { SERIAL_TASK_IDS, selectTasks } from "../dyno/suite/index.js";
 import { tuneProfile } from "../dyno/tuner.js";
 import type { EditMode } from "../harness/profile.js";
 
@@ -51,6 +51,7 @@ export async function runTuneCommand(args: CliArgs, options: TuneOptions): Promi
     trials: options.trials,
     budget: options.budget,
     concurrency: Number(process.env.REVCODE_TUNE_CONCURRENCY) || 2,
+    serialTaskIds: SERIAL_TASK_IDS,
     editModes,
     runTask: (task, profile) => runDynoTask({ task, profile, llm, model: args.model, provider: args.provider }),
     onProgress: (event) => {

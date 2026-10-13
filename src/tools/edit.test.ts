@@ -394,6 +394,18 @@ describe("editFile: forgiving matches", () => {
     );
   });
 
+  it("never edits inside an identifier through a loose match", () => {
+    expect(() => applyEdits("max = 1;\n", [{ oldText: "\nx\n", newText: "y" }], "f")).toThrow(EditError);
+    expect(() => applyEdits("xfoo  bar();\n", [{ oldText: "foo bar();", newText: "z" }], "f")).toThrow(EditError);
+    // At a real boundary the same loose rules do apply.
+    expect(applyEdits("call(foo  bar());\n", [{ oldText: "foo bar()", newText: "baz()" }], "f").content).toBe("call(baz());\n");
+  });
+
+  it("ignores block anchors that are only generic braces", () => {
+    const source = "{\n  one();\n}\n{\n  two();\n}\n";
+    expect(() => applyEdits(source, [{ oldText: "{\n  tw0();\n}", newText: "x" }], "f")).toThrow(EditError);
+  });
+
   it("reports which tier matched in the result", () => {
     const result = applyEdits("  a\n  b\n", [{ oldText: "a\nb", newText: "c" }], "x");
     expect(result.applied).toEqual([{ index: 0, strategy: "line-trimmed", count: 1, reindented: true, strippedPrefixes: false }]);
@@ -417,6 +429,12 @@ describe("editFile: line endings and BOM", () => {
     await put("mixed.txt", "a\r\nb\r\nc\nd\ne\r\n");
     await edit("mixed.txt", "d", "D");
     expect(await get("mixed.txt")).toBe("a\r\nb\r\nc\nD\ne\r\n");
+  });
+
+  it("keeps a lone CRLF line in an LF-dominant file", async () => {
+    await put("mixed2.txt", "a\nb\nc\r\nd\n");
+    await edit("mixed2.txt", "d", "D");
+    expect(await get("mixed2.txt")).toBe("a\nb\nc\r\nD\n");
   });
 
   it("preserves a UTF-8 BOM", async () => {
@@ -453,5 +471,50 @@ describe("editFile: scale", () => {
     expect(Date.now() - started).toBeLessThan(3_000);
     expect(message).toContain("Closest match");
     expect(message).toContain("at line 12346");
+  });
+});
+
+describe("applyEdits: never edits the wrong place", () => {
+  it("either produces the intended file or refuses, across random indentation drift", () => {
+    let seed = 7;
+    const random = (): number => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    let succeeded = 0;
+    let refused = 0;
+    for (let round = 0; round < 300; round += 1) {
+      const size = 6 + Math.floor(random() * 30);
+      const lines = Array.from({ length: size }, (_, i) => {
+        const indent = " ".repeat(Math.floor(random() * 4) * 2);
+        const body = random() < 0.2 ? "}" : `stmt_${Math.floor(random() * size)}(${i % 5});`;
+        return indent + body;
+      });
+      const start = Math.floor(random() * (size - 3));
+      const length = 1 + Math.floor(random() * 3);
+      const window = lines.slice(start, start + length);
+      const replacement = ["    replaced_a();", "    replaced_b();"];
+      const drifted = window.map((line) => (random() < 0.5 ? line.trimStart() : line) + (random() < 0.3 ? "  " : ""));
+
+      const source = `${lines.join("\n")}\n`;
+      const intended = `${[...lines.slice(0, start), ...replacement, ...lines.slice(start + length)].join("\n")}\n`;
+      try {
+        const { content } = applyEdits(source, [{ oldText: drifted.join("\n"), newText: replacement.join("\n") }], "f");
+        // A match is only acceptable if it replaced a window that equals the request ignoring whitespace.
+        const normalize = (text: string): string => text.split("\n").map((l) => l.trim()).join("\n");
+        if (content !== intended) {
+          const rebuilt = content.split("\n");
+          const at = rebuilt.findIndex((line) => line.trim() === "replaced_a();");
+          const original = source.split("\n").slice(at, at + length);
+          expect(normalize(original.join("\n"))).toBe(normalize(window.join("\n")));
+        }
+        succeeded += 1;
+      } catch (error) {
+        expect(error).toBeInstanceOf(EditError);
+        refused += 1;
+      }
+    }
+    expect(succeeded).toBeGreaterThan(100);
+    expect(succeeded + refused).toBe(300);
   });
 });

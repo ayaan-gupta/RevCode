@@ -160,6 +160,8 @@ export interface HashlineApplyResult {
 
 interface PlannedEdit {
   editIndex: number;
+  /** Processing order within one splice index (see applyHashlineEdits). */
+  rank: number;
   /** 0-based splice index. */
   at: number;
   deleteCount: number;
@@ -182,7 +184,7 @@ export function applyHashlineEdits(text: string, edits: readonly HashlineEdit[])
   const resolve = (ref: string): LineTag => {
     const tag = parseTag(ref);
     if (tag.line > lines.length) {
-      throw new Error(`Line ${tag.line} does not exist (file has ${lines.length} line${lines.length === 1 ? "" : "s"}).`);
+      throw new Error(`Line ${tag.line} does not exist (file has ${lines.length} line${lines.length === 1 ? "" : "s"}). Re-read the file for current anchors.`);
     }
     const actual = lineId(lines[tag.line - 1]);
     if (actual !== tag.hash) {
@@ -222,11 +224,12 @@ export function applyHashlineEdits(text: string, edits: readonly HashlineEdit[])
     }
   }
 
-  // Highest splice index first. At one index a replace goes before inserts, and
-  // inserts run in reverse request order so they end up in request order.
-  effective.sort(
-    (a, b) => b.at - a.at || Number(b.deleteCount > 0) - Number(a.deleteCount > 0) || b.editIndex - a.editIndex,
-  );
+  // Highest splice index first. Later splices at one index land in front of
+  // earlier ones, so the processing order is the reverse of the final order:
+  // the final order in a gap is appends (they belong to the line above), then
+  // inserts, then prepends (they belong to the line below), then the replaced
+  // lines; edits of one kind end up in request order.
+  effective.sort((a, b) => b.at - a.at || a.rank - b.rank || b.editIndex - a.editIndex);
   const next = lines.slice();
   for (const edit of effective) {
     next.splice(edit.at, edit.deleteCount, ...edit.insert);
@@ -245,6 +248,7 @@ function plan(edit: HashlineEdit, editIndex: number, resolve: (ref: string) => L
       const location = first.line === last.line ? `${first.line}#${first.hash}` : `${first.line}#${first.hash}..${last.line}#${last.hash}`;
       return {
         editIndex,
+        rank: 0,
         at: first.line - 1,
         deleteCount: last.line - first.line + 1,
         insert: normalizeContent(edit.content ?? []),
@@ -256,6 +260,7 @@ function plan(edit: HashlineEdit, editIndex: number, resolve: (ref: string) => L
       const after = edit.after ? resolve(edit.after) : undefined;
       return {
         editIndex,
+        rank: 3,
         at: after ? after.line : lineCount,
         deleteCount: 0,
         insert,
@@ -267,6 +272,7 @@ function plan(edit: HashlineEdit, editIndex: number, resolve: (ref: string) => L
       const before = edit.before ? resolve(edit.before) : undefined;
       return {
         editIndex,
+        rank: 1,
         at: before ? before.line - 1 : 0,
         deleteCount: 0,
         insert,
@@ -282,6 +288,7 @@ function plan(edit: HashlineEdit, editIndex: number, resolve: (ref: string) => L
       }
       return {
         editIndex,
+        rank: 2,
         at: before.line - 1,
         deleteCount: 0,
         insert,

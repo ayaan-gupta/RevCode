@@ -9,8 +9,8 @@ import { listDirectory, type ListToolInput } from "./list.js";
 import { execShell, type ShellToolInput } from "./shell.js";
 import { ShellSession } from "./shell-session.js";
 import { PlanStore, updatePlan, type PlanStep, type UpdatePlanInput } from "./plan.js";
-import { readFile, type ReadToolInput } from "./read.js";
-import { writeFile, type WriteToolInput } from "./write.js";
+import { readFile, readToolDefinitionFor, type ReadToolInput } from "./read.js";
+import { writeFile, writeToolDefinition, type WriteToolInput } from "./write.js";
 import { DEFAULT_PROFILE, type HarnessProfile } from "../harness/profile.js";
 import { applySchemaStyle } from "../harness/schema-style.js";
 import { normalizeToolArgs } from "./normalize-args.js";
@@ -41,15 +41,7 @@ export class ToolRegistry {
     this.unrestricted = options.unrestrictedPaths ?? false;
     this.profile = options.profile ?? DEFAULT_PROFILE;
     this.shellSession = new ShellSession({ cwd });
-    this.register({
-      definition: readToolDefinition,
-      handler: (input) =>
-        readFile(input as ReadToolInput, {
-          cwd: this.cwd,
-          unrestricted: this.unrestricted,
-          anchors: this.profile.editMode === "anchored",
-        }),
-    });
+    this.registerReadTool();
     this.register({
       definition: writeToolDefinition,
       handler: (input) => writeFile(input as WriteToolInput, { cwd: this.cwd, unrestricted: this.unrestricted }),
@@ -101,7 +93,22 @@ export class ToolRegistry {
     this.applyEditMode();
   }
 
+  /** read_file's description changes in anchored mode (it renders LINE#ID tags), so re-register on profile change. */
+  private registerReadTool(): void {
+    const anchors = this.profile.editMode === "anchored";
+    this.register({
+      definition: readToolDefinitionFor(anchors),
+      handler: (input) =>
+        readFile(input as ReadToolInput, {
+          cwd: this.cwd,
+          unrestricted: this.unrestricted,
+          anchors: this.profile.editMode === "anchored",
+        }),
+    });
+  }
+
   private applyEditMode(): void {
+    this.registerReadTool();
     for (const name of EDIT_TOOL_NAMES) {
       this.tools.delete(name);
     }
@@ -206,54 +213,6 @@ export interface ToolDefinition {
   description: string;
   parameters: Record<string, unknown>;
 }
-
-const readToolDefinition: ToolDefinition = {
-  name: "read_file",
-  description:
-    "Read a text file from the working directory. Returns content with 1-based line numbers, refuses ignored files, and omits binary content. Do not use for discovery — use list_directory or glob instead.",
-  parameters: {
-    type: "object",
-    properties: {
-      path: {
-        type: "string",
-        description: "File path to read, relative to the agent working directory.",
-      },
-      offset: {
-        type: "integer",
-        description:
-          "Optional 1-based line number to start reading from. Negative values count back from the end of the file.",
-      },
-      limit: {
-        type: "integer",
-        minimum: 0,
-        description: "Optional maximum number of lines to return.",
-      },
-    },
-    required: ["path"],
-    additionalProperties: false,
-  },
-};
-
-const writeToolDefinition: ToolDefinition = {
-  name: "write_file",
-  description:
-    "Write UTF-8 text content to a file inside the working directory, creating parent directories as needed. Returns metadata and a unified diff. Write the complete file content in one call.",
-  parameters: {
-    type: "object",
-    properties: {
-      path: {
-        type: "string",
-        description: "File path to write, relative to the agent working directory.",
-      },
-      content: {
-        type: "string",
-        description: "Complete UTF-8 text content to write to the file.",
-      },
-    },
-    required: ["path", "content"],
-    additionalProperties: false,
-  },
-};
 
 const shellToolDefinition: ToolDefinition = {
   name: "shell",
