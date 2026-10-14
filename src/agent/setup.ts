@@ -36,6 +36,7 @@ import {
   type Skill,
 } from "../skills/index.js";
 import { ToolRegistry } from "../tools/index.js";
+import { viewImage, viewImageToolDefinition, type ViewImageInput } from "../tools/view-image.js";
 import { createUniverseRecorder } from "../universe/recorder.js";
 import { ReceiptCollector } from "../universe/receipts.js";
 import { Universe } from "../universe/universe.js";
@@ -210,6 +211,28 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     }),
   );
   tools.markReadOnly([TASK_TOOL_NAME]);
+
+  // Image understanding: only when the provider has a vision model to ask.
+  if (runtimeLlm.describeImage) {
+    tools.register({
+      definition: viewImageToolDefinition,
+      handler: (input) =>
+        viewImage(
+          input as ViewImageInput,
+          {
+            cwd,
+            unrestricted: unrestrictedPaths,
+            describe: (image, signal) => {
+              if (!runtimeLlm.describeImage) {
+                throw new Error("The current model has no vision model configured, so images cannot be viewed.");
+              }
+              return runtimeLlm.describeImage(image, { signal });
+            },
+          },
+        ),
+    });
+    tools.markReadOnly([viewImageToolDefinition.name]);
+  }
 
   const permissions = new PermissionManager({
     mode,

@@ -712,3 +712,26 @@ describe("AnthropicClient abort", () => {
     expect(requests[0].signal).toBeInstanceOf(AbortSignal);
   });
 });
+
+describe("AnthropicClient.describeImage", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the image as a base64 content block to the main model", async () => {
+    const { requests } = stubFetch(() =>
+      jsonResponse({ content: [{ type: "text", text: "a cat" }], stop_reason: "end_turn", usage: { input_tokens: 5, output_tokens: 2 } }),
+    );
+    const client = new AnthropicClient("claude-test", "key");
+    const answer = await client.describeImage?.({ mediaType: "image/jpeg", base64: "QUJD", question: "what?" });
+    expect(answer).toBe("a cat");
+    expect(requests[0].body.model).toBe("claude-test");
+    expect(requests[0].body.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "QUJD" } },
+          { type: "text", text: "what?" },
+        ],
+      },
+    ]);
+  });
+});

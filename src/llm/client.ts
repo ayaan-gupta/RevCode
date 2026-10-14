@@ -26,9 +26,11 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { AnthropicClient } from "./anthropic.js";
 import { OpenAiCompatClient, type OpenAiCompatConfig } from "./openai-compat.js";
+import type { ImageQuestion } from "./vision.js";
 
 const ZAI_DEFAULT_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 const ZAI_DEFAULT_MODEL = "glm-5.2";
+const ZAI_DEFAULT_VISION_MODEL = "glm-4.6v";
 const OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1";
 const OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1";
 const OLLAMA_DEFAULT_HOST = "http://localhost:11434";
@@ -110,6 +112,13 @@ export interface LlmClient {
     tools?: ToolDefinition[],
     options?: CompleteOptions,
   ): Promise<LlmResponse>;
+
+  /**
+   * Answer a question about an image with a vision model. Present only when
+   * the provider has one configured (a text-only main model gets a companion
+   * vision model, e.g. Z.ai's glm-4.6v); the `view_image` tool depends on it.
+   */
+  describeImage?(image: ImageQuestion, options?: { signal?: AbortSignal }): Promise<string>;
 }
 
 export interface ToolDefinition {
@@ -229,6 +238,7 @@ function openAiCompatConfig(
         apiKey,
         headers: { "Accept-Language": "en-US,en" },
         thinkingToggle: "zai",
+        visionModel: readEnv("REVCODE_VISION_MODEL") ?? ZAI_DEFAULT_VISION_MODEL,
       };
     }
 
@@ -246,6 +256,7 @@ function openAiCompatConfig(
         maxTokensParam: "max_completion_tokens",
         // Reasoning models only accept the default temperature.
         omitTemperature: /^(?:o\d|gpt-5)/.test(model),
+        visionModel: readEnv("REVCODE_VISION_MODEL") ?? (/^(?:gpt-4o|gpt-4\.1|gpt-5|o[134])/.test(model) ? model : undefined),
       };
     }
 
@@ -260,6 +271,7 @@ function openAiCompatConfig(
         model: requireModel(provider, options.model),
         apiKey,
         headers: { "X-Title": "RevCode" },
+        visionModel: readEnv("REVCODE_VISION_MODEL"),
       };
     }
 
@@ -269,6 +281,7 @@ function openAiCompatConfig(
         baseUrl: options.baseUrl ?? ollamaBaseUrl(readEnv("OLLAMA_HOST")),
         model: requireModel(provider, options.model),
         apiKey: options.apiKey,
+        visionModel: readEnv("REVCODE_VISION_MODEL"),
       };
 
     case "openai-compat": {
@@ -284,6 +297,7 @@ function openAiCompatConfig(
         model: requireModel(provider, options.model),
         // Local servers (vLLM, LM Studio, llama.cpp) usually need no key.
         apiKey: options.apiKey ?? readEnv("REVCODE_API_KEY"),
+        visionModel: readEnv("REVCODE_VISION_MODEL"),
       };
     }
   }

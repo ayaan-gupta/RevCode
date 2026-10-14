@@ -643,3 +643,36 @@ describe("OpenAiCompatClient abort", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
   });
 });
+
+describe("OpenAiCompatClient.describeImage", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("is absent unless a vision model is configured", () => {
+    expect(new OpenAiCompatClient(BASE).describeImage).toBeUndefined();
+  });
+
+  it("asks the vision model (not the main model) with the image as a data URL", async () => {
+    const { requests } = stubFetch(() => jsonResponse({ choices: [{ message: { content: " a red square " } }] }));
+    const client = new OpenAiCompatClient({ ...BASE, visionModel: "test-vision" });
+    const answer = await client.describeImage?.({ mediaType: "image/png", base64: "QUJD", question: "colour?" });
+    expect(answer).toBe("a red square");
+    expect(requests[0].url).toBe("https://llm.test/v1/chat/completions");
+    expect(requests[0].body.model).toBe("test-vision");
+    expect(requests[0].body.stream).toBe(false);
+    expect(requests[0].body.messages).toEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "colour?" },
+          { type: "image_url", image_url: { url: "data:image/png;base64,QUJD" } },
+        ],
+      },
+    ]);
+  });
+
+  it("reports an API failure with the vision model's name", async () => {
+    stubFetch(() => jsonResponse({ error: { message: "plan does not include it" } }, 400));
+    const client = new OpenAiCompatClient({ ...BASE, visionModel: "test-vision" });
+    await expect(client.describeImage?.({ mediaType: "image/png", base64: "QUJD", question: "q" })).rejects.toThrow(/test-vision\) failed \(400\)/);
+  });
+});

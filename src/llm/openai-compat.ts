@@ -34,6 +34,7 @@ import {
   streamIdleTimeoutMs,
 } from "./defaults.js";
 import { fetchWithRetry } from "./retry.js";
+import { IMAGE_ANSWER_TOKENS, type ImageQuestion } from "./vision.js";
 import { readSse } from "./sse.js";
 import { extractToolCalls } from "./tool-call-parser.js";
 import { parseToolArguments, parseToolResultMessage } from "./tool-result.js";
@@ -61,15 +62,65 @@ export interface OpenAiCompatConfig extends TimeoutConfig {
   maxTokensParam?: "max_tokens" | "max_completion_tokens";
   /** Provider has a request-level thinking switch (`thinking: {type: "disabled"}`, Z.ai style). */
   thinkingToggle?: "zai";
+  /** A vision-capable model on the same endpoint; enables `describeImage` (and so the `view_image` tool). */
+  visionModel?: string;
 }
 
 export class OpenAiCompatClient implements LlmClient {
   private readonly config: OpenAiCompatConfig;
   private readonly endpoint: string;
 
+  /** Set only when a vision model is configured, so callers can feature-detect it. */
+  readonly describeImage?: LlmClient["describeImage"];
+
   constructor(config: OpenAiCompatConfig) {
     this.config = config;
     this.endpoint = `${normalizeBaseUrl(config.baseUrl)}/chat/completions`;
+    if (config.visionModel) {
+      this.describeImage = (image, options) => this.askVisionModel(config.visionModel as string, image, options?.signal);
+    }
+  }
+
+  private async askVisionModel(model: string, image: ImageQuestion, signal?: AbortSignal): Promise<string> {
+    const response = await fetchWithRetry(
+      this.endpoint,
+      {
+        method: "POST",
+        headers: this.headers(false),
+        body: JSON.stringify({
+          model,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: image.question },
+                { type: "image_url", image_url: { url: `data:${image.mediaType};base64,${image.base64}` } },
+              ],
+            },
+          ],
+          temperature: 0.1,
+          [this.config.maxTokensParam ?? "max_tokens"]: IMAGE_ANSWER_TOKENS,
+          stream: false,
+        }),
+        signal,
+      },
+      { timeoutMs: requestTimeoutMs(this.config) },
+    );
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`${this.config.name} vision request (${model}) failed (${response.status}): ${text.slice(0, 500)}`);
+    }
+    let payload: OpenAiChatCompletionResponse;
+    try {
+      payload = JSON.parse(text) as OpenAiChatCompletionResponse;
+    } catch {
+      throw new Error(`${this.config.name} vision request returned a non-JSON response: ${text.slice(0, 200)}`);
+    }
+    const answer = payload.choices?.[0]?.message?.content?.trim();
+    if (!answer) {
+      throw new Error(`${this.config.name} vision model ${model} returned no answer`);
+    }
+    return answer;
   }
 
   async complete(

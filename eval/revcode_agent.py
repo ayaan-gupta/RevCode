@@ -223,7 +223,9 @@ class RevCodeAgent(BaseInstalledAgent):
             )
         await self.exec_as_agent(environment, command=command, env=api_env)
 
-        local_trajectory = Path("/tmp/revcode-trajectory-host.jsonl")
+        # Per-trial path: trials run concurrently, so a shared host file mixes their transcripts.
+        local_trajectory = Path(self.logs_dir) / "revcode-trajectory.jsonl"
+        local_trajectory.parent.mkdir(parents=True, exist_ok=True)
         try:
             await environment.download_file(self.TRAJECTORY_PATH, local_trajectory)
             self._local_trajectory = local_trajectory

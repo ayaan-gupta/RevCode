@@ -40,6 +40,7 @@ import {
   streamIdleTimeoutMs,
 } from "./defaults.js";
 import { fetchWithRetry } from "./retry.js";
+import { IMAGE_ANSWER_TOKENS, type ImageQuestion } from "./vision.js";
 import { readSse } from "./sse.js";
 import { parseToolArguments, parseToolResultMessage } from "./tool-result.js";
 
@@ -92,6 +93,42 @@ export class AnthropicClient implements LlmClient {
       throw error;
     }
   }
+
+  /** Claude models are multimodal, so the main model answers image questions. */
+  readonly describeImage: LlmClient["describeImage"] = async (image: ImageQuestion, options) => {
+    const response = await fetchWithRetry(
+      this.endpoint,
+      {
+        method: "POST",
+        headers: this.headers(false),
+        body: JSON.stringify({
+          model: this.model,
+          max_tokens: IMAGE_ANSWER_TOKENS,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "image", source: { type: "base64", media_type: image.mediaType, data: image.base64 } },
+                { type: "text", text: image.question },
+              ],
+            },
+          ],
+        }),
+        signal: options?.signal,
+      },
+      { timeoutMs: requestTimeoutMs(this.options) },
+    );
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Anthropic vision request failed (${response.status}): ${text.slice(0, 500)}`);
+    }
+    const payload = JSON.parse(text) as AnthropicMessageResponse;
+    const answer = fromAnthropicResponse(payload).content.trim();
+    if (!answer) {
+      throw new Error("Anthropic returned no answer for the image");
+    }
+    return answer;
+  };
 
   private async completeOnce(
     messages: LlmMessage[],
