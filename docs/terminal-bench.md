@@ -52,6 +52,11 @@ hacks, no `AGENTS.md`/hooks/MCP.
 | Out of time | 10 |
 | Verifier hung (`torch-tensor-parallelism`, counted as a failure) | 1 |
 
+Two of those 33 were infrastructure, not the agent: the `portfolio-optimization` verifier could not download `uv`
+(HTTP 502) and the `torch-tensor-parallelism` verifier hung. Both passed when re-run alone, which would make it
+**56 / 87 (64.4%)**. That figure is not like-for-like with the 54 (only infrastructure-hit failures were retried), so
+54 stays the as-measured number.
+
 By task time limit: 15 min 35/49, 20 min 4/6, 30 min 7/16, 40 min 1/2, 60 min 5/12. Short tasks go well; the
 long, compute-heavy ones (path tracing, MIPS, cryptanalysis, installing Windows 3.11 in QEMU) mostly run out of
 time or miss a hidden requirement.
@@ -70,10 +75,39 @@ Problems the full run exposed, and what was done:
 - Two tasks ended with the model killing the agent by accident (`pkill -f <word from the task>`). The adapter now
   passes the task via `--prompt-file` and runs RevCode under a renamed `node` binary.
 
+## Is the rest harness or model? Failure reruns (thinking on + `view_image` vs thinking off)
+
+The 21 "wrong result" tasks (excluding the infrastructure one) were re-run twice with a fresh trial each: once with
+thinking **on** plus the new `view_image` tool, once as a control with thinking **off** and no vision tool (same
+bundle as the original run). Both arms start from tasks that failed once, so some pass by chance; only the
+comparison between arms is meaningful, not the absolute counts.
+
+| | Passed (of 21) |
+| --- | --- |
+| Thinking on + `view_image` | 9 |
+| Thinking off (control) | 7 |
+
+Passed in both: `cancel-async-tasks`, `count-dataset-tokens`, `fix-git`, `headless-terminal`,
+`large-scale-text-editing`. Only with thinking on: `bn-fit-modify`, `chess-best-move`, `mteb-leaderboard`,
+`train-fasttext`. Only in the control: `configure-git-webserver`, `dna-assembly`. Discordant pairs 4 vs 2, exact sign
+test p ≈ 0.69, so **no evidence either way on thinking**. What the reruns do show:
+
+- **Run-to-run noise is large.** Five of 21 first-run failures passed under either config, so a single trial per
+  task is a noisy estimate (the true rate of the harness is probably a few points above or below any one run).
+- **Most failures are not harness-fixable.** After the fixes above, what remains is mostly model limits (fine
+  numeric/format details, long compute-heavy tasks, hard reasoning), plus noise. The searchable part is small.
+- **`view_image` did its job on the one task that needs eyes.** `chess-best-move` failed in the control and passed
+  with the tool: the agent read the board with the vision model, cross-checked it square by square, and found the
+  mating moves with python-chess. One task is an anecdote, not a measurement.
+
+Published numbers suggest the harness can matter a lot for a given model (same model, different harness, 15+ point
+gaps on the leaderboard), so there may be more to find, but it needs a larger, repeated experiment than this setup
+can afford (a full pass takes ~6 hours at ±5 points per run).
+
 ## What is NOT known
 
-- Whether thinking-off is better on the long (30–60 min) tasks: it was only A/B-tested on the 15-minute sample,
-  where it matched thinking-on at about half the wall-clock time.
+- Whether thinking-off is better on the long (30–60 min) tasks: it matched thinking-on on the 15-minute sample at
+  about half the wall-clock time, and the failure reruns above could not separate them either.
 - Whether `apply_patch` or hashline editing helps GLM; that is what `revcode tune` is for, but the built-in Dyno
   suite is too easy for GLM-5.2 (16/16 at baseline), so it has no headroom to tune on.
 - The score on the two multi-hour tasks, and run-to-run variance beyond the single repeat above.
