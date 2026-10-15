@@ -5,7 +5,7 @@ An AI coding agent for the terminal — with two ideas you won't find in other h
 - **Parallel Universes** — every task can run in an isolated, recorded copy of your project. The agent works with *no permission prompts*; you review one changeset, then **land** it, **rewind** it, **fork** it, **replay** it on another model, or throw it away.
 - **Dyno** — a self-tuning harness. `revcode tune` benchmarks edit formats, prompt styles and tool schemas against *your* model on a built-in suite, and keeps what actually helps — with honest statistics.
 
-Plus everything a serious harness needs in 2026: streaming TUI, permission modes, sessions, `AGENTS.md`, MCP, skills, hooks, subagents, multi-provider (Z.ai GLM, Claude, OpenAI, OpenRouter, Ollama, any OpenAI-compatible server).
+Plus everything a serious harness needs in 2026: a polished terminal UI, permission modes, sessions, `AGENTS.md`, MCP, skills, hooks, subagents, multi-provider (Z.ai GLM, Claude, OpenAI, OpenRouter, Ollama, any OpenAI-compatible server).
 
 > **Status:** active development. All of the below is covered by automated tests (`npm test`), but **no real-model benchmark numbers are claimed** — see [docs/terminal-bench.md](docs/terminal-bench.md) for what has and hasn't been measured.
 
@@ -14,10 +14,11 @@ Requires Node ≥ 20 and `git`; runs on Linux and macOS (the shell tool needs `b
 ## Quick start
 
 ```bash
-cp .env.example .env     # add a key, e.g. Z_AI_API_KEY or ANTHROPIC_API_KEY
 npm install
-npm run dev              # interactive session (tsx)
+npm run dev              # interactive session (tsx); first run walks you through choosing a provider and saving a key
 ```
+
+Or set a key yourself: `cp .env.example .env` and fill in `Z_AI_API_KEY` / `ANTHROPIC_API_KEY` / …, or run `revcode setup` any time (keys are saved to `~/.revcode/.env`, mode 0600, never into a project).
 
 ```bash
 npm run build && node dist/index.js --help
@@ -37,6 +38,31 @@ revcode -c                                # continue the latest session here
 ```
 
 Behind an HTTP(S) proxy, set `HTTPS_PROXY` (and `NO_PROXY`) as usual — RevCode re-launches itself once with Node's `NODE_USE_ENV_PROXY=1` (Node 22.21+/24+) so model calls go through it. Set `REVCODE_NO_PROXY_REEXEC=1` to opt out.
+
+## The terminal UI
+
+An inline, scrollback-friendly interface: your conversation lives in the terminal's own scrollback (select, search and copy as usual) while a small live block stays pinned at the bottom with the activity line, the prompt, completions and the status line. It keeps working *while the agent works* — type ahead and your messages queue, press **Esc** to interrupt, answer permission prompts in the same place.
+
+- **Real prompt editing.** Multi-line input (**Shift+Enter**, **Ctrl+J**, or `\` then Enter), word/line motions, kill ring (**Ctrl+W/U/K/Y**), undo (**Ctrl+_**), per-project history (**↑/↓**, **Ctrl+R** search), Unicode/emoji-aware cursor movement, and bracketed paste — large pastes collapse to `[Pasted text #1 +42 lines]` and are sent in full. Drop a file onto the terminal and it becomes an `@mention`.
+- **Completion.** `/` shows commands (and their arguments — models, modes, sessions); `@` fuzzy-completes files from your project (git-aware); **Tab** accepts.
+- **Readable output.** Markdown with tables, lists, quotes, task lists, links and syntax-highlighted code; long paragraphs stream row by row. Tool calls render as compact cards (command + exit code + output preview, file diffs with line numbers and shading); **Ctrl+O** shows more. Terminal escape sequences in tool output are stripped.
+- **Permission prompts with context.** Edits show a diff *before* you approve; shell commands show the command. Choose *yes*, *yes and don't ask again for `git commit*`* (or *allow all edits this session*), or *no — and tell RevCode what to do instead*. **Shift+Tab** cycles ask → accept-edits → plan; in plan mode a finished plan offers to carry itself out.
+- **Works everywhere.** Truecolor → 256 → 16 colors → none (`NO_COLOR`), light/dark themes (`--theme`, `/theme`), ASCII fallback on the Linux console, OSC 8 hyperlinks where supported, plain line mode for pipes and `TERM=dumb`. Resizing, suspend (**Ctrl+Z**) and focus changes are handled; the terminal is always restored on exit.
+- **Quality of life.** `!cmd` runs a shell command yourself (and tells the model); `-p "task"` runs headlessly; friendly explanations for auth/rate-limit/network errors; the status line shows mode, project, git branch, model and context use; the terminal title shows when it is working.
+
+| Key | Action |
+| --- | --- |
+| Enter | send · Shift+Enter / Ctrl+J / `\` Enter: new line |
+| Esc | interrupt a running task · clear the prompt (undoable) |
+| Ctrl+C | clear the prompt · twice to quit (twice during a task: quit now) |
+| ↑ ↓ · Ctrl+R | history · reverse search |
+| Tab · Shift+Tab | accept completion · cycle permission mode |
+| Ctrl+O · Ctrl+L · Ctrl+Z | more tool output · clear screen · suspend |
+| Alt+B/F · Ctrl+A/E · Ctrl+W/U/K/Y · Ctrl+_ | word/line motion · delete/yank · undo |
+
+Slash commands: `/help` `/status` `/model` `/mode` `/plan` `/clear` `/compact` `/context` `/cost` `/resume` `/sessions` `/init` `/review` `/copy` `/export` `/verbose` `/theme` `/permissions` `/mcp` `/skills` `/hooks` `/memory` `/tools` `/profile` `/doctor` `/receipt` `/exit` — plus the Parallel Universe commands below and any custom commands or skills. Shell completion: `revcode completion bash|zsh|fish`.
+
+Shift+Enter needs a terminal that reports modified keys (kitty keyboard protocol): iTerm2, Ghostty, WezTerm, kitty, foot, Windows Terminal, recent VS Code. Elsewhere use **Ctrl+J** or `\` + Enter. More in [docs/tui.md](docs/tui.md) (terminal notes, environment switches, how it is built and tested).
 
 ## Parallel Universes
 
@@ -98,7 +124,8 @@ src/
 ├── tools/      file tools, shell session, edit modes, apply-patch, anchored edits
 ├── universe/   Parallel Universes: snapshots, land/merge, receipts, replay, compare, export
 ├── dyno/       task suite, runner, tuner, report
-├── mcp/ skills/ hooks/ config/ commands/ tui/
+├── tui/        live prompt region, line editor, key parser, markdown/diff/tool rendering, themes
+├── mcp/ skills/ hooks/ config/ commands/
 eval/           Harbor adapter for Terminal-Bench
 docs/           universes, dyno, terminal-bench, memory design
 ```

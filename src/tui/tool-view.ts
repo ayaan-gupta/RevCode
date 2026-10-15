@@ -118,6 +118,15 @@ export function activityLabel(call: Call): string {
 
 type Outcome = "ok" | "error" | "denied";
 
+/** The model-facing refusal text, reworded for the person who made the decision. */
+export function userFacingDenial(message: string): string {
+  const said = /and said: "([\s\S]*?)"\. Do not retry/.exec(message);
+  if (said) return `you said: "${said[1]}"`;
+  if (/^The user declined/.test(message)) return "you declined this action";
+  if (/^Plan mode is read-only/.test(message)) return "plan mode is read-only (Shift+Tab or /plan to leave it)";
+  return message;
+}
+
 function classify(result: unknown): { outcome: Outcome; message?: string } {
   if (result && typeof result === "object") {
     const record = result as Record<string, unknown>;
@@ -163,10 +172,10 @@ export function renderToolCard(call: Call, result: unknown, options: ToolCardOpt
   const timing = options.durationMs !== undefined && options.durationMs >= 1000 ? ` ${style.glyphs.dot} ${formatDuration(options.durationMs)}` : "";
 
   if (outcome !== "ok") {
-    const text = sanitizeForDisplay(message ?? "failed").trim();
+    const text = sanitizeForDisplay(outcome === "denied" ? userFacingDenial(message ?? "declined") : (message ?? "failed")).trim();
     const lines = text.split("\n");
     const shown = lines.slice(0, verbose ? 12 : 3);
-    const label = outcome === "denied" ? "Declined" : "Failed";
+    const label = outcome === "denied" ? "Not run" : "Failed";
     const role = outcome === "denied" ? "warn" : "error";
     rows.push(`${lead}${style.paint(role, `${label}:`)} ${truncate(shown[0] ?? "", textWidth - label.length - 2)}`);
     for (const extra of shown.slice(1)) rows.push(`${pad}${style.dim(truncate(extra, textWidth))}`);

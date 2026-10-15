@@ -140,7 +140,9 @@ export function rgbTo256(color: Rgb): number {
   const gray = Math.max(0, Math.min(23, Math.round(((r + g + b) / 3 - 8) / 10)));
   const grayValue = 8 + gray * 10;
   const grayRgb: Rgb = [grayValue, grayValue, grayValue];
-  return distance(color, grayRgb) < distance(color, cube) ? 232 + gray : 16 + 36 * cr + 6 * cg + cb;
+  // A noticeably tinted dark color (the diff backgrounds) must keep its hue even when a gray is nearer.
+  const chroma = Math.max(r, g, b) - Math.min(r, g, b);
+  return chroma < 24 && distance(color, grayRgb) < distance(color, cube) ? 232 + gray : 16 + 36 * cr + 6 * cg + cb;
 }
 
 export function rgbTo16(color: Rgb): number {

@@ -118,7 +118,7 @@ export async function runSetup(options: { reason?: string } = {}): Promise<boole
       apiKey = key.trim();
       env[choice.envKey] = apiKey;
     } else if (choice.id === "openai-compat") {
-      const key = await ui.prompt({ title: [style.bold("API key (if the server needs one)"), style.dim("  Press Enter to skip.")], secret: true });
+      const key = await ui.prompt({ title: [style.bold("API key (if the server needs one)"), style.dim("  Press Enter to skip.")], secret: true, optional: true });
       if (key?.trim()) {
         apiKey = key.trim();
         env.REVCODE_API_KEY = apiKey;

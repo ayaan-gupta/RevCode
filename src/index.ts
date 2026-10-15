@@ -11,6 +11,7 @@ import { workingDirectoryProblem } from "./agent/cwd.js";
 import { HELP_TEXT, parseCommandLine, resolveArgs, type CliArgs } from "./cli.js";
 import { runUniversesCommand } from "./commands/universes.js";
 import { runProfileCommand, runSessionsCommand } from "./commands/misc.js";
+import { completionScript } from "./commands/completion.js";
 import { missingCredentials, runSetup, runSetupCommand } from "./commands/setup.js";
 import { loadEnvFiles } from "./config/env.js";
 import { loadConfig } from "./config/config.js";
@@ -48,6 +49,16 @@ async function main(): Promise<void> {
     case "tune": {
       const { runTuneCommand } = await import("./commands/tune.js");
       process.exitCode = await runTuneCommand(withConfig(command.args), command.options);
+      return;
+    }
+    case "completion": {
+      const script = completionScript(command.shell);
+      if (!script) {
+        console.error("Usage: revcode completion <bash|zsh|fish>");
+        process.exitCode = 2;
+        return;
+      }
+      process.stdout.write(script);
       return;
     }
     case "setup":

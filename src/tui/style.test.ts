@@ -65,6 +65,12 @@ describe("color conversion", () => {
     expect(rgbTo256([128, 128, 128])).toBeGreaterThanOrEqual(232);
   });
 
+  it("keeps the hue of dark tinted colors (diff backgrounds) instead of collapsing to gray", () => {
+    expect(rgbTo256([22, 62, 38])).toBe(22); // dark green
+    expect(rgbTo256([78, 28, 38])).toBe(52); // dark red
+    expect(rgbTo256([40, 40, 44])).toBeGreaterThanOrEqual(232); // near-neutral still maps to the gray ramp
+  });
+
   it("maps to the nearest of the 16 ANSI colors", () => {
     expect(rgbTo16([255, 100, 100])).toBe(9);
     expect(rgbTo16([10, 10, 10])).toBe(0);

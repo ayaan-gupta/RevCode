@@ -17,7 +17,7 @@ import type { Style } from "./style.js";
 import { renderToolCard } from "./tool-view.js";
 import type { Ui } from "./ui.js";
 import { shortenPath } from "./frame.js";
-import { truncate, wrapAnsi } from "./width.js";
+import { stripAnsi, truncate, visibleWidth, wrapAnsi } from "./width.js";
 
 const INDENT = "  ";
 const MAX_CONTENT_WIDTH = 116;
@@ -149,12 +149,23 @@ export class TerminalRenderer {
   }
 
   /** Print rows as a block of `kind`, with one blank line between blocks of different kinds. */
-  private emit(kind: Kind, rows: string[], options: { indent?: boolean } = {}): void {
-    if (rows.length === 0) return;
+  private emit(kind: Kind, input: string[], options: { indent?: boolean } = {}): void {
+    if (input.length === 0) return;
+    // Notices and sections are authored as long lines; wrap them under their own indentation.
+    const rows = kind === "meta" || kind === "block" ? this.wrapRows(input) : input;
     const separate = this.lastKind !== undefined && (this.lastKind !== kind || kind === "block") && !(kind === "meta" && this.lastKind === "meta");
     const body = options.indent === false ? rows.join("\n") : this.indent(rows);
     this.ui.print(separate ? `\n${body}` : body);
     this.lastKind = kind;
+  }
+
+  private wrapRows(rows: string[]): string[] {
+    const width = this.contentWidth();
+    return rows.flatMap((row) => {
+      if (visibleWidth(row) <= width) return [row];
+      const lead = /^ */.exec(stripAnsi(row))?.[0] ?? "";
+      return wrapAnsi(row, width, { indent: lead });
+    });
   }
 
   // --- welcome / goodbye -------------------------------------------------------------------
@@ -191,6 +202,10 @@ export class TerminalRenderer {
 
   /** Echo the user's message into the transcript. */
   echoUser(display: string): void {
+    if (this.ui.echoesInput) {
+      this.lastKind = "user";
+      return;
+    }
     const { style } = this;
     const width = Math.max(20, this.ui.columns - 4);
     const rows = wrapAnsi(sanitizeForDisplay(display), width);

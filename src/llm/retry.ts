@@ -35,6 +35,20 @@ export interface RetryOptions {
   onRetry?: (info: { attempt: number; delayMs: number; reason: string }) => void;
 }
 
+export interface RetryNotice {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  reason: string;
+}
+
+let retryListener: ((notice: RetryNotice) => void) | undefined;
+
+/** Observe every retry from every call (the interactive UI shows "retrying in 4s" while it waits). */
+export function setRetryListener(listener: ((notice: RetryNotice) => void) | undefined): void {
+  retryListener = listener;
+}
+
 const DEFAULTS = {
   // Generous budget so transient failures don't abort a whole benchmark task:
   // DNS hiccups right after container startup (ENOTFOUND) and — importantly —
@@ -97,6 +111,7 @@ export async function fetchWithRetry(
     }
 
     options.onRetry?.({ attempt, delayMs: delay, reason });
+    retryListener?.({ attempt, maxAttempts: cfg.maxAttempts, delayMs: delay, reason });
     await sleep(delay, signal);
   }
 

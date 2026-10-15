@@ -104,6 +104,7 @@ export type Command =
   | { kind: "sessions"; args: CliArgs }
   | { kind: "profile"; args: CliArgs; action: string }
   | { kind: "setup"; args: CliArgs }
+  | { kind: "completion"; args: CliArgs; shell: string }
   | { kind: "help" }
   | { kind: "version" };
 
@@ -161,6 +162,16 @@ const TUNE_FLAGS: Record<string, { key: keyof TuneOptions; kind: FlagKind }> = {
   "--yes": { key: "yes", kind: "boolean" },
 };
 
+/** Every long flag (and short alias) the main command accepts, for shell completion. */
+export function flagNames(): { long: string[]; short: string[]; valued: string[] } {
+  const long = Object.keys(FLAGS);
+  const short = [...SHORT_ALIASES.keys()];
+  const valued = Object.entries(FLAGS)
+    .filter(([, spec]) => spec.kind !== "boolean")
+    .map(([flag]) => flag);
+  return { long, short, valued };
+}
+
 export function defaultArgs(): CliArgs {
   return {
     cwd: process.cwd(),
@@ -204,6 +215,10 @@ export function parseCommandLine(argv: string[]): Command {
     case "sessions": {
       const { args } = parseFlags(rest, {});
       return { kind: "sessions", args };
+    }
+    case "completion": {
+      const { args } = parseFlags([], {});
+      return { kind: "completion", args, shell: rest[0] ?? "" };
     }
     case "setup":
     case "login": {
@@ -446,6 +461,7 @@ Usage:
   revcode sessions                list saved sessions
   revcode profile <show|reset>    inspect or clear the tuned profile for --model
   revcode setup                   choose a provider and save your API key
+  revcode completion <shell>      print a bash | zsh | fish completion script
 
 Common flags:
   -m, --model <name>        model id (default ${DEFAULT_MODEL})

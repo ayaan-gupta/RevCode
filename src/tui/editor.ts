@@ -60,6 +60,8 @@ export interface EditorOptions {
   completer?: Completer;
   /** Rewrite a paste before it is inserted (e.g. a dropped file path → an @mention). */
   transformPaste?: (text: string) => string | undefined;
+  /** Enter on an empty line submits "" instead of being ignored (optional prompts). */
+  allowEmpty?: boolean;
 }
 
 export class LineEditor {
@@ -86,6 +88,7 @@ export class LineEditor {
 
   private completer: Completer | undefined;
   private transformPaste: ((text: string) => string | undefined) | undefined;
+  private allowEmpty: boolean;
   private menu: { result: CompletionResult; selected: number; first: number } | undefined;
   private menuDismissedFor: string | undefined;
   private menuSuspended = false;
@@ -96,6 +99,7 @@ export class LineEditor {
     this.history = [...(options.history ?? [])];
     this.completer = options.completer;
     this.transformPaste = options.transformPaste;
+    this.allowEmpty = options.allowEmpty ?? false;
   }
 
   // --- accessors ---------------------------------------------------------------------
@@ -796,7 +800,7 @@ export class LineEditor {
       return { type: "handled" };
     }
     const display = this.text.replace(/\s+$/, "");
-    if (display.trim().length === 0) return { type: "handled" };
+    if (display.trim().length === 0 && !this.allowEmpty) return { type: "handled" };
     const text = display.replace(PLACEHOLDER_GLOBAL, (whole, id: string) => this.pastes.get(Number(id)) ?? whole);
     this.addHistory(display);
     this.text = "";

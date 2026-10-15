@@ -119,8 +119,12 @@ describe("renderToolCard: failures", () => {
   });
 
   it("distinguishes a declined action", () => {
-    const rows = card("shell", { command: "rm x" }, { error: "The user declined this action.", denied: true });
-    expect(rows[1]).toBe("  ⎿ Declined: The user declined this action.");
+    const rows = card("shell", { command: "rm x" }, { error: "The user declined this action. Do not retry it; ask what they would prefer instead.", denied: true });
+    expect(rows[1]).toBe("  ⎿ Not run: you declined this action");
+    const said = card("shell", { command: "rm x" }, { error: 'The user declined this action and said: "use make clean". Do not retry it as written; follow their guidance.', denied: true });
+    expect(said[1]).toBe('  ⎿ Not run: you said: "use make clean"');
+    const plan = card("write_file", { path: "a" }, { error: "Plan mode is read-only: this action would change things. Finish...", denied: true });
+    expect(plan[1]).toContain("plan mode is read-only");
   });
 
   it("limits multi-line errors", () => {

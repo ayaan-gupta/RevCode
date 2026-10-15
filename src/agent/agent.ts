@@ -14,11 +14,12 @@ import type { CliArgs } from "../cli.js";
 import { loadConfig } from "../config/config.js";
 import { loadInstructions } from "../config/instructions.js";
 import { resolveProvider, type LlmToolCall } from "../llm/client.js";
+import { setRetryListener } from "../llm/retry.js";
 import { DEFAULT_PROFILE } from "../harness/profile.js";
 import { buildSystemPrompt as buildPrompt } from "../harness/prompt.js";
 import { expandCommand, findCommand, parseSlashInput } from "../skills/index.js";
 import { confirmYesNo, createTerminalApprover } from "../tui/approval.js";
-import { createCompleter, FileIndex } from "../tui/completion.js";
+import { createCompleter, FileIndex, rankByFuzzy } from "../tui/completion.js";
 import { LineEditor } from "../tui/editor.js";
 import { formatDuration, formatTokens, plural, sanitizeForDisplay } from "../tui/fmt.js";
 import { HistoryStore, historyFileFor } from "../tui/history.js";
@@ -102,7 +103,7 @@ export class Agent {
     this.caps = detectCaps(process.env, Boolean(process.stdout.isTTY), args.theme === "auto" ? undefined : args.theme);
     this.style = new Style(this.caps);
 
-    if (this.interactive && tty) {
+    if (this.interactive && tty && process.env.REVCODE_PLAIN_UI !== "1") {
       const history = new HistoryStore(historyFileFor(args.cwd));
       this.files = new FileIndex(args.cwd);
       void this.files.load();
@@ -136,6 +137,11 @@ export class Agent {
       this.ui = new PlainUI({ stdin: process.stdin, stdout: process.stdout, columns: process.stdout.columns });
     }
     this.renderer = new TerminalRenderer(args.cwd, args.model, this.ui, this.style, { verbose: args.verbose });
+    if (this.interactive) {
+      setRetryListener((notice) =>
+        this.ui.setNote(`${notice.reason} ${this.style.glyphs.dot} retrying in ${formatDuration(notice.delayMs)} (attempt ${notice.attempt + 1}/${notice.maxAttempts})`, notice.delayMs + 2000),
+      );
+    }
     this.registerShutdownHandlers();
   }
 
@@ -150,6 +156,7 @@ export class Agent {
       return;
     }
     this.disposed = true;
+    setRetryListener(undefined);
     this.ui.unmount();
     void this.runtime?.dispose();
   }
@@ -236,7 +243,7 @@ export class Agent {
       return this.runtime;
     }
     const observer = this.interactive ? this.interactiveObserver() : this.headlessObserver();
-    const approver = this.interactive && this.ui.interactive ? createTerminalApprover({ renderer: this.renderer, cwd: () => this.runtime?.cwd ?? this.args.cwd }) : undefined;
+    const approver = this.interactive && this.ui.interactive ? createTerminalApprover({ renderer: this.renderer, cwd: () => this.runtime?.cwd ?? this.args.cwd, onCancel: () => this.interruptTurn() }) : undefined;
     const warn = (message: string): void => {
       if (this.interactive) this.renderer.warn(message);
       else process.stderr.write(`[revcode] ${message}\n`);
@@ -714,7 +721,7 @@ export class Agent {
     const command = parsed ? findCommand(rt.commands, parsed.name) : undefined;
     if (!command || !parsed) {
       const known = this.slashCommands().map((c) => c.command);
-      const guess = known.find((c) => c.startsWith(`/${name}`)) ?? known.find((c) => c.includes(name));
+      const guess = rankByFuzzy(name, known, (c) => c.slice(1), 1)[0];
       this.renderer.error(`Unknown command: /${name}.${guess ? ` Did you mean ${guess}?` : ""} Type /help for the list.`);
       return true;
     }

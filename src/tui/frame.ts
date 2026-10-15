@@ -295,11 +295,12 @@ function modalLines(modal: ModalModel, style: Style, cols: number, budget: numbe
   lines.push(...title);
 
   if (modal.kind === "select") {
+    const labelWidth = modal.options.some((o) => o.hint) ? Math.min(44, Math.max(...modal.options.map((o) => visibleWidth(o.label)))) : 0;
     modal.options.forEach((option, index) => {
       const selected = index === modal.selected;
       const pointer = selected ? style.paint("prompt", style.glyphs.pointer) : " ";
       const number = `${index + 1}.`;
-      const text = `${number} ${option.label}`;
+      const text = `${number} ${option.hint ? padEnd(option.label, labelWidth) : option.label}`;
       const hint = option.hint ? `  ${style.dim(option.hint)}` : "";
       lines.push(truncate(`${pointer} ${selected ? style.strong("accent", text) : text}${hint}`, ruleWidth));
     });

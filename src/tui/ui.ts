@@ -7,7 +7,10 @@
  * prompts in the same place. `PlainUI` is the same surface for pipes and dumb terminals.
  */
 
+import { appendFileSync, mkdirSync } from "node:fs";
+import path from "node:path";
 import { format } from "node:util";
+import { revcodeHome } from "../config/paths.js";
 import { createInterface, type Interface } from "node:readline";
 import { buildFrame, type ActivityModel, type FrameModel, type ModalModel, type SelectOption, type StatusModel } from "./frame.js";
 import type { HistoryStore } from "./history.js";
@@ -36,12 +39,16 @@ export interface SelectRequest {
 export interface PromptRequest {
   title: string[];
   secret?: boolean;
+  /** Enter on an empty line resolves "" (an optional answer). Default: an answer is required. */
+  optional?: boolean;
   footer?: string;
 }
 
 export interface Ui {
   /** True for the live, redrawn UI; false for the plain line-based fallback. */
   readonly interactive: boolean;
+  /** True when the terminal itself already shows what the user typed (cooked-mode line input). */
+  readonly echoesInput: boolean;
   readonly columns: number;
   mount(): void;
   unmount(): void;
@@ -52,6 +59,8 @@ export interface Ui {
   setBusy(busy: boolean, label?: string): void;
   /** A short message in the status line (fades after a couple of seconds). */
   hint(text: string): void;
+  /** Extra detail on the activity line, e.g. "HTTP 503 — retrying in 4s" (clears itself after `ttlMs`). */
+  setNote(text: string | undefined, ttlMs?: number): void;
   beginTool(id: string, label: string): void;
   endTool(id: string): void;
   addTokens(estimate: number): void;
@@ -101,12 +110,15 @@ interface ActiveModal {
 }
 
 const HINT_MS = 2000;
+/** Slow the spinner to one repaint a second (screen readers, slow links): REVCODE_REDUCE_MOTION=1. */
+const REDUCE_MOTION = process.env.REVCODE_REDUCE_MOTION === "1";
 const FORCE_EXIT_MS = 3000;
 /** Silence from the model (no text, no tool activity) longer than this is flagged in the activity line. */
 const STALL_MS = 20_000;
 
 export class TerminalUI implements Ui {
   readonly interactive = true;
+  readonly echoesInput = false;
   private readonly screen: LiveScreen;
   private readonly modes: TerminalModes;
   private readonly parser = new KeyParser();
@@ -131,6 +143,7 @@ export class TerminalUI implements Ui {
   private modalStartedAt: number | undefined;
   private modalQueue: Array<() => void> = [];
   private hintState: { text: string; until: number } | undefined;
+  private noteState: { text: string; until: number } | undefined;
   private exitArmed: { key: string; until: number } | undefined;
   private lastInterruptAt = 0;
   private ticker: NodeJS.Timeout | undefined;
@@ -139,6 +152,8 @@ export class TerminalUI implements Ui {
   private redrawTimer: NodeJS.Timeout | undefined;
   private resizeTimer: NodeJS.Timeout | undefined;
   private escTimer: NodeJS.Timeout | undefined;
+  private suspended = false;
+  private suspendKeepAlive: NodeJS.Timeout | undefined;
   private restoreConsole: (() => void) | undefined;
 
   constructor(private readonly options: TerminalUiOptions) {
@@ -215,16 +230,35 @@ export class TerminalUI implements Ui {
 
   private readonly onData = (chunk: string | Buffer): void => {
     const data = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    for (const ev of this.parser.feed(data)) this.handleKey(ev);
+    for (const ev of this.parser.feed(data)) this.guarded(() => this.handleKey(ev));
     if (this.escTimer) clearTimeout(this.escTimer);
     if (this.parser.hasPending) {
       this.escTimer = setTimeout(() => {
-        for (const ev of this.parser.flush()) this.handleKey(ev);
+        for (const ev of this.parser.flush()) this.guarded(() => this.handleKey(ev));
         this.redraw();
       }, 40);
     }
     this.redraw();
   };
+
+  /** A bug in one key handler must not take the whole session down; log it and carry on. */
+  private guarded(action: () => void): void {
+    try {
+      action();
+    } catch (error) {
+      this.logFault(error);
+    }
+  }
+
+  private logFault(error: unknown): void {
+    try {
+      const file = path.join(revcodeHome(), "tui-errors.log");
+      mkdirSync(path.dirname(file), { recursive: true });
+      appendFileSync(file, `${new Date().toISOString()} ${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`);
+    } catch {
+      // nowhere to log; ignore
+    }
+  }
 
   private handleKey(ev: KeyEvent): void {
     switch (ev.name) {
@@ -337,18 +371,32 @@ export class TerminalUI implements Ui {
     this.options.hooks?.onInterrupt?.();
   }
 
+  /** Ctrl+Z: hand the terminal back to the shell, stop, and take it again on `fg`. */
   private suspend(): void {
-    if (process.platform === "win32") return;
+    if (process.platform === "win32" || this.suspended) return;
+    this.suspended = true;
     this.screen.release();
     this.modes.leave();
+    // With raw input off and stdin paused nothing else keeps the event loop alive.
+    this.suspendKeepAlive = setInterval(() => undefined, 1000);
     process.kill(process.pid, "SIGTSTP");
+    // If the stop was ignored (an orphaned process group, some sandboxes) we are still running:
+    // take the terminal back instead of sitting in a dead UI. After a real stop this timer fires
+    // only once we have been continued, when resuming is a no-op.
+    setTimeout(() => this.resume(), 250).unref();
   }
 
-  private readonly onContinue = (): void => {
+  private resume(): void {
+    if (!this.suspended) return;
+    this.suspended = false;
+    if (this.suspendKeepAlive) clearInterval(this.suspendKeepAlive);
+    this.suspendKeepAlive = undefined;
     if (!this.mounted) return;
     this.modes.enter();
     this.redraw();
-  };
+  }
+
+  private readonly onContinue = (): void => this.resume();
 
   // --- output -------------------------------------------------------------------------
 
@@ -438,20 +486,27 @@ export class TerminalUI implements Ui {
     this.redraw();
   }
 
+  setNote(text: string | undefined, ttlMs = 5000): void {
+    this.noteState = text ? { text, until: Date.now() + ttlMs } : undefined;
+    this.ensureTicker();
+    this.scheduleRedraw();
+  }
+
   private setHint(text: string): void {
     this.hintState = { text, until: Date.now() + HINT_MS };
     this.ensureTicker();
   }
 
   private ensureTicker(): void {
-    const needed = this.busy || this.hintState !== undefined;
+    const needed = this.busy || this.hintState !== undefined || this.noteState !== undefined;
     if (needed && !this.ticker) {
       this.ticker = setInterval(() => {
         this.frameNo += 1;
         if (this.hintState && Date.now() >= this.hintState.until) this.hintState = undefined;
+        if (this.noteState && Date.now() >= this.noteState.until) this.noteState = undefined;
         if (!this.busy && !this.hintState) this.ensureTicker();
         this.redraw();
-      }, 90);
+      }, REDUCE_MOTION ? 1000 : 90);
       this.ticker.unref();
     } else if (!needed && this.ticker) {
       clearInterval(this.ticker);
@@ -478,9 +533,11 @@ export class TerminalUI implements Ui {
     const parts = [formatDuration(elapsed)];
     if (this.tokens > 0) parts.push(`${this.style.glyphs.down} ${formatTokens(this.tokens)} tokens`);
     const quiet = now - this.lastActivityAt;
-    if (quiet > STALL_MS) parts.push(`no output for ${formatDuration(quiet)}`);
+    const note = this.noteState && this.noteState.until > now ? this.noteState.text : undefined;
+    if (note) parts.push(note);
+    else if (quiet > STALL_MS) parts.push(`no output for ${formatDuration(quiet)}`);
     if (!interrupting) parts.push("esc to interrupt");
-    return { label: word, meta: parts.join(dot), mode: "spin", frame: this.frameNo, stalled: quiet > STALL_MS };
+    return { label: word, meta: parts.join(dot), mode: "spin", frame: this.frameNo, stalled: quiet > STALL_MS || note !== undefined };
   }
 
   private setTitle(working: boolean): void {
@@ -525,7 +582,7 @@ export class TerminalUI implements Ui {
     return this.runModal(
       () =>
         new Promise<string | undefined>((resolve) => {
-          const editor = new LineEditor();
+          const editor = new LineEditor({ allowEmpty: request.optional ?? false });
           const finish = (value: string | undefined): void => {
             this.modal = undefined;
             resolve(value);
@@ -596,7 +653,11 @@ export class TerminalUI implements Ui {
       clearTimeout(this.redrawTimer);
       this.redrawTimer = undefined;
     }
-    this.screen.draw(this.frame());
+    try {
+      this.screen.draw(this.frame());
+    } catch (error) {
+      this.logFault(error);
+    }
   }
 
   /** Coalesce bursts (streaming tokens) into at most one repaint per ~16ms. */
@@ -669,12 +730,15 @@ export class TerminalUI implements Ui {
 /** Line-based fallback for pipes, `TERM=dumb`, and anything that is not a capable TTY. */
 export class PlainUI implements Ui {
   readonly interactive = false;
+  readonly echoesInput: boolean;
   private rl: Interface | undefined;
   private lines: AsyncIterator<string> | undefined;
 
   constructor(
-    private readonly options: { stdin: NodeJS.ReadableStream; stdout: { write(data: string): unknown }; columns?: number; promptText?: string },
-  ) {}
+    private readonly options: { stdin: NodeJS.ReadableStream & { isTTY?: boolean }; stdout: { write(data: string): unknown }; columns?: number; promptText?: string },
+  ) {
+    this.echoesInput = Boolean(options.stdin.isTTY);
+  }
 
   get columns(): number {
     return this.options.columns ?? 100;
@@ -694,13 +758,14 @@ export class PlainUI implements Ui {
 
   async nextInput(): Promise<UiInput> {
     this.mount();
-    this.options.stdout.write(this.options.promptText ?? "> ");
+    const prompt = this.echoesInput ? (this.options.promptText ?? "> ") : "";
+    this.options.stdout.write(prompt);
     while (this.lines) {
       const next = await this.lines.next();
       if (next.done) return { type: "eof" };
       const text = next.value.trim();
       if (text.length > 0) return { type: "submit", text, display: text };
-      this.options.stdout.write(this.options.promptText ?? "> ");
+      this.options.stdout.write(prompt);
     }
     return { type: "eof" };
   }
@@ -711,6 +776,7 @@ export class PlainUI implements Ui {
 
   setBusy(): void {}
   hint(): void {}
+  setNote(): void {}
   beginTool(): void {}
   endTool(): void {}
   addTokens(): void {}

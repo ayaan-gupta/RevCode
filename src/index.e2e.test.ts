@@ -119,3 +119,52 @@ describe("revcode CLI (end to end)", () => {
     expect(execFileSync("cat", [path.join(project, "a.txt")], { encoding: "utf8" })).toBe("after\n");
   });
 });
+
+describe("interactive session without a terminal (piped stdin)", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "revcode-e2e-pipe-"));
+  const home = path.join(dir, "home");
+
+  function session(input: string, extra: string[] = []) {
+    return spawnSync(process.execPath, [tsxCli, entry, "--provider", "local-test", "--model", "test", "--no-snapshot", "--no-instructions", ...extra], {
+      cwd: dir,
+      env: { ...process.env, REVCODE_HOME: home, NO_COLOR: "1", TERM: "dumb" },
+      input,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+  }
+
+  it("answers slash commands and exits at end of input", () => {
+    const result = session("/status\n/help\n/exit\n");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Status");
+    expect(result.stdout).toContain("Version");
+    expect(result.stdout).toContain("Keyboard");
+    expect(result.stdout).not.toContain("\u001b");
+  });
+
+  it("treats a slash path as a message, not a command, and reports unknown commands helpfully", () => {
+    const result = session("/usr/bin/env is missing\n/hlp\n");
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("Local test client is active"); // the path went to the model
+    expect(result.stdout).toContain("Unknown command: /hlp. Did you mean /help?");
+  });
+
+  it("runs a user shell command with ! and tells the model about it", () => {
+    const result = session("!echo from-the-user\n");
+    expect(result.stdout).toContain("exit 0");
+    expect(result.stdout).toContain("from-the-user");
+  });
+
+  it("prints the shell completion script", () => {
+    const result = revcode(["completion", "bash"], dir, home);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("complete -o default -F _revcode revcode");
+  });
+
+  it("treats -p as headless: runs the task and exits", () => {
+    const result = revcode(["--provider", "local-test", "--model", "test", "--no-snapshot", "--no-instructions", "-p", '/tool list_directory {"path":"."}'], dir, home);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("[list_directory(");
+  });
+});

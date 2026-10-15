@@ -86,6 +86,8 @@ function patchRows(patch: string, renderer: TerminalRenderer, maxRows: number): 
 export interface ApproverOptions {
   renderer: TerminalRenderer;
   cwd: () => string;
+  /** Esc on the prompt: decline *and* stop the running task. */
+  onCancel?: () => void;
 }
 
 /** Build the rows shown above the options. */
@@ -137,17 +139,19 @@ export function createTerminalApprover(options: ApproverOptions): (request: Appr
       title,
       options: [{ label: "Yes" }, { label: always }, { label: "No, and tell RevCode what to do differently" }],
       hotkeys: { y: 0, a: 1, n: 2 },
-      footer: "↑↓ to move · enter to select · y / a / n · esc to decline",
+      footer: "↑↓ to move · enter to select · y / a / n · esc to stop the task",
     });
     if (choice === 0) return { answer: "allow" };
     if (choice === 1) return { answer: "always" };
     if (choice === 2) {
       const feedback = await ui.prompt({
         title: [renderer.style.bold("What should RevCode do instead?"), renderer.style.dim("  (optional — press Enter to just decline)")],
+        optional: true,
         footer: "enter to send · esc to decline without a note",
       });
       return { answer: "deny", feedback: feedback?.trim() || undefined };
     }
+    options.onCancel?.();
     return { answer: "deny" };
   };
 }
