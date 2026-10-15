@@ -202,3 +202,24 @@ describe("MarkdownStream", () => {
     expect(stream.push("const x").tail).toBe("│ const x");
   });
 });
+
+describe("MarkdownStream: very long lines", () => {
+  it("streams a huge single line without quadratic slowdown and renders the same rows at the end", () => {
+    const sentence = "The quick brown fox jumps over the lazy dog while **bold** and `code` keep coming. ";
+    const text = sentence.repeat(500); // ~40 KB without a newline
+    const started = Date.now();
+    const stream = new MarkdownStream({ style: plain, width: 80 });
+    const out: string[] = [];
+    for (let i = 0; i < text.length; i += 4) out.push(...stream.push(text.slice(i, i + 4)).lines);
+    out.push(...stream.flush());
+    expect(Date.now() - started).toBeLessThan(3000);
+    expect(out).toEqual(renderMarkdownRows(text, { style: plain, width: 80 }));
+  });
+
+  it("shows the latest raw text as the tail once the line is too long to re-render per token", () => {
+    const stream = new MarkdownStream({ style: plain, width: 80 });
+    const result = stream.push("word ".repeat(1500));
+    expect(result.tail.startsWith("…")).toBe(true);
+    expect(result.tail.length).toBeLessThan(200);
+  });
+});

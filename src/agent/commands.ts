@@ -286,7 +286,7 @@ export async function runCommand(ctx: CommandContext, name: string, arg: string)
         const shown = sessions.slice(0, 9);
         const choice = await renderer.ui.select({
           title: [style.bold("Resume a session"), style.dim(`  ${plural(sessions.length, "session")} in this directory`)],
-          options: shown.map((s) => ({ label: truncate(s.title, 52), hint: `${s.updatedAt.slice(5, 16).replace("T", " ")} · ${s.turns} turns` })),
+          options: shown.map((s) => ({ label: truncate(s.title, 52), hint: `${s.updatedAt.slice(5, 16).replace("T", " ")} · ${plural(s.turns, "turn")}` })),
         });
         if (choice === undefined) return true;
         id = shown[choice].id;

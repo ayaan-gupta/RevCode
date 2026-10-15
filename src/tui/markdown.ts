@@ -21,6 +21,14 @@ export interface MdOptions {
 /** How many wrapped rows of the line being written stay in the live tail before committing. */
 const TAIL_ROWS = 4;
 
+/**
+ * Re-wrapping the growing line on every token is quadratic. Past this many characters the live
+ * tail falls back to showing the raw latest text and the line is rendered once, when it ends —
+ * rows already committed stay valid, so the final output does not depend on this cutoff.
+ */
+const PARTIAL_RENDER_LIMIT = 4000;
+const RAW_TAIL_CHARS = 160;
+
 // --- inline -------------------------------------------------------------------------------
 
 const ESCAPABLE = "\\`*_{}[]()#+-.!|~<>";
@@ -562,6 +570,9 @@ export class MarkdownStream {
     const { style, width } = this.options;
     const text = this.buffer;
     if (text.length === 0) return { commit: [], tail: "" };
+    if (text.length > PARTIAL_RENDER_LIMIT) {
+      return { commit: [], tail: style.dim(`${style.glyphs.ellipsis}${text.slice(-RAW_TAIL_CHARS).replace(/\s+/g, " ")}`) };
+    }
     if (this.fence) {
       const row = this.codeRows(text).join("\n");
       return { commit: [], tail: row };
