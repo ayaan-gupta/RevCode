@@ -862,7 +862,17 @@ export class LineEditor {
 
   private handleVimNormal(ev: KeyEvent): EditorResult | undefined {
     if (ev.name === "text") {
-      for (const ch of Array.from(ev.text ?? "")) this.vimChar(ch);
+      // Keystrokes can arrive many to a chunk ("cwrepair"): once a command switches to insert
+      // mode, the rest of the chunk is text, not more commands.
+      const chars = Array.from(ev.text ?? "");
+      for (let i = 0; i < chars.length; i += 1) {
+        this.vimChar(chars[i]);
+        if (this.vimInsert) {
+          const rest = chars.slice(i + 1).join("");
+          if (rest) this.typeText(rest);
+          break;
+        }
+      }
       return { type: "handled" };
     }
     if (ev.name === "paste") return { type: "handled" };

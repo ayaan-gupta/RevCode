@@ -9,8 +9,10 @@
  */
 
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import type { CliArgs } from "../cli.js";
 import { loadInstructions } from "../config/instructions.js";
+import { persistAllowRule } from "../config/persist-rules.js";
 import { isProjectTrusted, projectExecutableConfigs, trustProject } from "../config/trust.js";
 import { createCompletionGate, type CompletionGate } from "../harness/completion-gate.js";
 import { collectEnvSnapshot } from "../harness/env-snapshot.js";
@@ -241,6 +243,18 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     approver: options.approver,
     isReadOnly: (name) => tools.isReadOnly(name),
     hookDecision: (callId) => hooks?.lastPermissionDecision(callId),
+    // "Don't ask again" in an interactive session is remembered for this project.
+    onRuleAdded:
+      options.interactive && options.approver && !hermetic
+        ? (rule) => {
+            try {
+              const saved = persistAllowRule(args.cwd, rule);
+              if (saved.added) options.observer?.notice?.(`Saved "${rule}" to ${path.relative(args.cwd, saved.file)} — it will not ask again in this project.`);
+            } catch {
+              // remembering is a convenience; the session rule is already in place
+            }
+          }
+        : undefined,
   });
 
   // Hooks

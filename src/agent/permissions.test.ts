@@ -74,6 +74,33 @@ describe("PermissionManager middleware", () => {
     expect(pm.rules().allow).toContain("shell(git commit*)");
   });
 
+  it("reports learned rules so they can be persisted, but not edit-mode upgrades", async () => {
+    const onRuleAdded = vi.fn();
+    const pm = make("ask", { approver: async () => ({ answer: "always" as const }), onRuleAdded });
+    const mw = pm.middleware();
+    await mw.before!(call("shell", { command: "npm install lodash" }));
+    expect(onRuleAdded).toHaveBeenCalledWith("shell(npm install*)");
+    await mw.before!(call("write_file", { path: "a.txt", content: "x" }));
+    expect(onRuleAdded).toHaveBeenCalledTimes(1); // "allow all edits" is a mode change, not a rule
+    expect(pm.getMode()).toBe("accept-edits");
+  });
+
+  it("carries the user's words back to the model when declining", async () => {
+    const pm = make("ask", { approver: async () => ({ answer: "deny" as const, feedback: "use make instead" }) });
+    const decision = await pm.middleware().before!(call("shell", { command: "gcc x.c" }));
+    expect((decision as { reason: string }).reason).toContain('"use make instead"');
+  });
+
+  it("offers a menu label that says what 'always' will cover", async () => {
+    const seen: string[] = [];
+    const pm = make("ask", { approver: async (request) => { seen.push(request.alwaysLabel ?? ""); return "allow" as const; } });
+    const mw = pm.middleware();
+    await mw.before!(call("shell", { command: "git commit -m x" }));
+    await mw.before!(call("edit_file", { path: "a" }));
+    expect(seen[0]).toBe("Yes, and don't ask again for `git commit*` in this project");
+    expect(seen[1]).toBe("Yes, and allow all edits this session");
+  });
+
   it("tells the model not to retry a declined action", async () => {
     const pm = make("ask", { approver: async () => "deny" });
     const decision = await pm.middleware().before!(call("write_file", { path: "a" }));

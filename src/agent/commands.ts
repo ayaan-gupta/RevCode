@@ -376,6 +376,29 @@ export async function runCommand(ctx: CommandContext, name: string, arg: string)
       return true;
     }
 
+    case "/config": {
+      const a = ctx.args;
+      const pairs: Array<[string, string]> = [
+        ["Provider", `${rt.provider}${a.baseUrl ? ` (${a.baseUrl})` : ""}`],
+        ["Model", ctx.getModel()],
+        ["Permission mode", rt.permissions.getMode()],
+        ["Profile", a.profile ?? "auto"],
+        ["Theme", `${a.theme ?? "auto"} (showing ${style.theme})`],
+        ["Vim mode", a.vim ? "on" : "off"],
+        ["Universe by default", a.universe ? "yes" : "no"],
+        ["Max tool iterations", String(a.maxIterations)],
+        ["MCP / hooks / instructions", `${a.mcp === false ? "off" : "on"} / ${a.hooks === false ? "off" : "on"} / ${a.instructions === false ? "off" : "on"}`],
+      ];
+      renderer.section("Settings in effect", renderer.keyValues(pairs));
+      renderer.section("Config files", [
+        ...(ctx.configFiles.length === 0 ? [style.dim("none found — defaults and flags only")] : ctx.configFiles.map((f) => `${style.paint("ok", style.glyphs.check)} ${f}`)),
+        ...ctx.configWarnings.map((w) => `${style.paint("warn", style.glyphs.warn)} ${w}`),
+        "",
+        style.dim("Order (later wins): ~/.revcode/config.json < .revcode/config.json < .revcode/config.local.json < command-line flags."),
+      ]);
+      return true;
+    }
+
     case "/permissions": {
       const [action, ...ruleParts] = arg.split(/\s+/).filter(Boolean);
       const rule = ruleParts.join(" ");

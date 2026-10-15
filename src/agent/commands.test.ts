@@ -169,6 +169,17 @@ describe("built-in slash commands", () => {
     expect(ui.text()).toContain('Expected "auto", "dark" or "light"');
   });
 
+  it("/config shows the settings in effect and the files they came from", async () => {
+    ctx.configFiles = ["/home/u/.revcode/config.json"];
+    ctx.configWarnings = ["bad key"];
+    await runCommand(ctx, "/config", "");
+    const out = ui.text();
+    expect(out).toContain("Settings in effect");
+    expect(out).toContain("Permission mode");
+    expect(out).toContain("/home/u/.revcode/config.json");
+    expect(out).toContain("bad key");
+  });
+
   it("/vim toggles Vim editing and remembers the choice", async () => {
     await runCommand(ctx, "/vim", "");
     expect(ui.text()).toContain("Vim mode on");

@@ -229,3 +229,21 @@ describe("Vim mode: editing", () => {
     expect(e.getText()).toBe("base");
   });
 });
+
+describe("Vim mode: keystrokes arriving in one chunk", () => {
+  it("treats text after an insert command as typed text, not more commands", () => {
+    const e = vim("fix the bug");
+    e.handle(ev("text", { text: "0wcwrepair" }));
+    expect(e.getText()).toBe("fix repair bug");
+    expect(e.vimModeName()).toBe("INSERT");
+    e.handle(ev("escape"));
+    e.handle(ev("text", { text: "0Aend" }));
+    expect(e.getText()).toBe("fix repair bugend");
+  });
+
+  it("keeps interpreting commands after a non-inserting command in the same chunk", () => {
+    const e = vim("abcdef");
+    e.handle(ev("text", { text: "0xxx" }));
+    expect(e.getText()).toBe("def");
+  });
+});

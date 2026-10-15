@@ -48,6 +48,7 @@ An inline, scrollback-friendly interface: your conversation lives in the termina
 - **Readable output.** Markdown with tables, lists, quotes, task lists, links and syntax-highlighted code; long paragraphs stream row by row. Tool calls render as compact cards (command + exit code + output preview, file diffs with line numbers and shading); **Ctrl+O** shows more. Terminal escape sequences in tool output are stripped.
 - **Permission prompts with context.** Edits show a diff *before* you approve; shell commands show the command. Choose *yes*, *yes and don't ask again for `git commit*`* (or *allow all edits this session*), or *no — and tell RevCode what to do instead*. **Shift+Tab** cycles ask → accept-edits → plan; in plan mode a finished plan offers to carry itself out.
 - **Works everywhere.** Truecolor → 256 → 16 colors → none (`NO_COLOR`), light/dark themes (`--theme`, `/theme`), ASCII fallback on the Linux console, OSC 8 hyperlinks where supported, plain line mode for pipes and `TERM=dumb`. Resizing, suspend (**Ctrl+Z**) and focus changes are handled; the terminal is always restored on exit.
+- **Vim mode.** `/vim` (or `--vim`, or `"vim": true` in config) gives the prompt Vim-style normal/insert modes — counts, motions, `d`/`c`/`y` operators, registers, undo — with a block/bar cursor and a mode indicator.
 - **Quality of life.** `!cmd` runs a shell command yourself (and tells the model); `-p "task"` runs headlessly; friendly explanations for auth/rate-limit/network errors; the status line shows mode, project, git branch, model and context use; the terminal title shows when it is working.
 
 | Key | Action |
@@ -60,7 +61,7 @@ An inline, scrollback-friendly interface: your conversation lives in the termina
 | Ctrl+O · Ctrl+L · Ctrl+Z | more tool output · clear screen · suspend |
 | Alt+B/F · Ctrl+A/E · Ctrl+W/U/K/Y · Ctrl+_ | word/line motion · delete/yank · undo |
 
-Slash commands: `/help` `/status` `/model` `/mode` `/plan` `/clear` `/compact` `/context` `/cost` `/resume` `/sessions` `/init` `/review` `/copy` `/export` `/verbose` `/theme` `/permissions` `/mcp` `/skills` `/hooks` `/memory` `/tools` `/profile` `/doctor` `/receipt` `/exit` — plus the Parallel Universe commands below and any custom commands or skills. Shell completion: `revcode completion bash|zsh|fish`.
+Slash commands: `/help` `/status` `/model` `/mode` `/plan` `/clear` `/compact` `/context` `/cost` `/resume` `/sessions` `/init` `/review` `/diff` `/copy` `/export` `/verbose` `/vim` `/theme` `/permissions` `/mcp` `/skills` `/hooks` `/memory` `/tools` `/profile` `/doctor` `/receipt` `/exit` — plus the Parallel Universe commands below and any custom commands or skills. Shell completion: `revcode completion bash|zsh|fish`.
 
 Shift+Enter needs a terminal that reports modified keys (kitty keyboard protocol): iTerm2, Ghostty, WezTerm, kitty, foot, Windows Terminal, recent VS Code. Elsewhere use **Ctrl+J** or `\` + Enter. More in [docs/tui.md](docs/tui.md) (terminal notes, environment switches, how it is built and tested).
 
@@ -99,7 +100,7 @@ Harness choices (edit tool format, prompt style, tool-schema style, parallel too
 
 ## Safety & permissions
 
-Modes: `ask` (default interactive), `accept-edits`, `plan` (read-only), `yolo` (default for headless runs and inside Universes). `--allow "shell(git status*)"` / `--deny "shell(git push*)"` rules; deny always wins. A short list of catastrophic commands (`rm -rf /`, `mkfs`, `dd` to a disk, fork bombs) is refused in **every** mode. Project hooks and MCP servers run commands, so they only load for directories you've trusted.
+Modes: `ask` (default interactive), `accept-edits`, `plan` (read-only), `yolo` (default for headless runs and inside Universes). Choosing *"don't ask again for `git commit*`"* at a prompt remembers the rule for the project in `.revcode/config.local.json` (kept out of git via `.git/info/exclude`); *"allow all edits this session"* is just accept-edits mode. `--allow "shell(git status*)"` / `--deny "shell(git push*)"` rules; deny always wins. A short list of catastrophic commands (`rm -rf /`, `mkfs`, `dd` to a disk, fork bombs) is refused in **every** mode. Project hooks and MCP servers run commands, so they only load for directories you've trusted.
 
 ## Tools
 

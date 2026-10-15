@@ -213,7 +213,7 @@ export function formatReceipt(receipt: Receipt): string[] {
       ? "no files changed"
       : `${receipt.files.length} file${receipt.files.length === 1 ? "" : "s"} changed${add + del > 0 ? ` (+${add} −${del})` : ""}`;
   const seconds = (receipt.durationMs / 1000).toFixed(1);
-  lines.push(`${fileSummary} · ${receipt.commands.length} command${receipt.commands.length === 1 ? "" : "s"} · ${receipt.toolCalls} tool calls · ${seconds}s`);
+  lines.push(`${fileSummary} · ${receipt.commands.length} command${receipt.commands.length === 1 ? "" : "s"} · ${receipt.toolCalls} tool call${receipt.toolCalls === 1 ? "" : "s"} · ${seconds}s`);
 
   const v = receipt.verification;
   if (receipt.files.length > 0 || v.ran) {

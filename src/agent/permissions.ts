@@ -52,6 +52,8 @@ export interface PermissionOptions {
    * deny rules, plan mode, or the catastrophic-command refusal.
    */
   hookDecision?: (callId: string) => "allow" | "deny" | "ask" | undefined;
+  /** Called when the user chose "don't ask again": a chance to persist the new allow rule. */
+  onRuleAdded?: (rule: string) => void;
 }
 
 export type Evaluation =
@@ -69,6 +71,7 @@ export class PermissionManager {
   private approver?: Approver;
   private readonly isReadOnly: (toolName: string) => boolean;
   private readonly hookDecision?: PermissionOptions["hookDecision"];
+  private readonly onRuleAdded?: PermissionOptions["onRuleAdded"];
   /** Serializes prompts so two approvals never fight over the terminal. */
   private promptQueue: Promise<unknown> = Promise.resolve();
 
@@ -79,6 +82,7 @@ export class PermissionManager {
     this.approver = options.approver;
     this.isReadOnly = options.isReadOnly ?? (() => false);
     this.hookDecision = options.hookDecision;
+    this.onRuleAdded = options.onRuleAdded;
   }
 
   getMode(): PermissionMode {
@@ -234,7 +238,9 @@ export class PermissionManager {
         // "Allow all edits this session" is exactly what accept-edits mode means.
         if (this.mode === "ask") this.mode = "accept-edits";
       } else {
-        this.addAllowRule(call.name === "shell" ? `shell(${commandPrefix(String(call.arguments.command ?? ""))}*)` : call.name);
+        const rule = call.name === "shell" ? `shell(${commandPrefix(String(call.arguments.command ?? ""))}*)` : call.name;
+        this.addAllowRule(rule);
+        this.onRuleAdded?.(rule);
       }
     }
     return { allow: true };
@@ -242,8 +248,8 @@ export class PermissionManager {
 
   private alwaysLabel(tool: string, args: Record<string, unknown>): string {
     if (EDIT_TOOLS.has(tool)) return "Yes, and allow all edits this session";
-    if (tool === "shell") return `Yes, and don't ask again for \`${commandPrefix(String(args.command ?? ""))}*\``;
-    return `Yes, and don't ask again for ${tool}`;
+    if (tool === "shell") return `Yes, and don't ask again for \`${commandPrefix(String(args.command ?? ""))}*\` in this project`;
+    return `Yes, and don't ask again for ${tool} in this project`;
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {
