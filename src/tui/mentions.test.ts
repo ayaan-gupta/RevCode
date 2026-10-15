@@ -2,8 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { expandMentions } from "./mentions.js";
-import { interpretApprovalKey } from "./approval.js";
+import { expandMentions, pastedPathToMention } from "./mentions.js";
 
 describe("expandMentions", () => {
   const dir = mkdtempSync(path.join(os.tmpdir(), "revcode-mention-"));
@@ -31,15 +30,29 @@ describe("expandMentions", () => {
   });
 });
 
-describe("interpretApprovalKey", () => {
-  it("maps keys to answers", () => {
-    expect(interpretApprovalKey("y", {})).toBe("allow");
-    expect(interpretApprovalKey("Y", {})).toBe("allow");
-    expect(interpretApprovalKey("n", {})).toBe("deny");
-    expect(interpretApprovalKey("a", {})).toBe("always");
-    expect(interpretApprovalKey("\r", { name: "return" })).toBe("allow");
-    expect(interpretApprovalKey(undefined, { name: "escape" })).toBe("deny");
-    expect(interpretApprovalKey("c", { name: "c", ctrl: true })).toBe("deny");
-    expect(interpretApprovalKey("x", {})).toBeUndefined();
+describe("pastedPathToMention", () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "revcode-paste-"));
+  mkdirSync(path.join(dir, "src"));
+  writeFileSync(path.join(dir, "src", "a.ts"), "x");
+  writeFileSync(path.join(dir, "my file.txt"), "x");
+  const outside = mkdtempSync(path.join(os.tmpdir(), "revcode-outside-"));
+  writeFileSync(path.join(outside, "pic.png"), "x");
+
+  it("turns a pasted project file path into a mention", () => {
+    expect(pastedPathToMention(path.join(dir, "src", "a.ts"), dir)).toBe("@src/a.ts ");
+    expect(pastedPathToMention(`'${path.join(dir, "src", "a.ts")}'`, dir)).toBe("@src/a.ts ");
+    expect(pastedPathToMention(`file://${path.join(dir, "src", "a.ts")}`, dir)).toBe("@src/a.ts ");
+  });
+
+  it("leaves paths outside the project as plain paths, quoting spaces", () => {
+    expect(pastedPathToMention(path.join(outside, "pic.png"), dir)).toBe(`${path.join(outside, "pic.png")} `);
+    expect(pastedPathToMention(path.join(dir, "my file.txt").replace(/ /g, "\\ "), dir)).toBe(`"${path.join(dir, "my file.txt")}" `);
+  });
+
+  it("ignores prose, missing files, directories and multi-line text", () => {
+    expect(pastedPathToMention("hello world", dir)).toBeUndefined();
+    expect(pastedPathToMention(path.join(dir, "nope.ts"), dir)).toBeUndefined();
+    expect(pastedPathToMention(path.join(dir, "src"), dir)).toBeUndefined();
+    expect(pastedPathToMention(`${path.join(dir, "src", "a.ts")}\nmore`, dir)).toBeUndefined();
   });
 });

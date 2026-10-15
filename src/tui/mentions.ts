@@ -46,3 +46,34 @@ export function expandMentions(text: string, cwd: string): ExpandedMentions {
 
   return blocks.length === 0 ? { text, files } : { text: `${text}\n\n${blocks.join("\n\n")}`, files };
 }
+
+/**
+ * Dragging a file into the terminal pastes its path (often quoted or with escaped spaces).
+ * When the paste is exactly one existing file, turn it into an `@mention` so the contents are
+ * attached; a path outside the project is returned plainly so the model can still open it.
+ */
+export function pastedPathToMention(pasted: string, cwd: string): string | undefined {
+  let text = pasted.trim();
+  if (text.length === 0 || text.length > 600 || text.includes("\n")) return undefined;
+  if ((text.startsWith("'") && text.endsWith("'")) || (text.startsWith('"') && text.endsWith('"'))) text = text.slice(1, -1);
+  if (text.startsWith("file://")) {
+    try {
+      text = decodeURIComponent(text.slice("file://".length));
+    } catch {
+      return undefined;
+    }
+  }
+  text = text.replace(/\\ /g, " ");
+  if (text.startsWith("~/") && process.env.HOME) text = path.join(process.env.HOME, text.slice(2));
+  if (!text.startsWith("/") && !text.startsWith("./") && !text.startsWith("../")) return undefined;
+  const absolute = path.resolve(cwd, text);
+  try {
+    if (!existsSync(absolute) || !statSync(absolute).isFile()) return undefined;
+  } catch {
+    return undefined;
+  }
+  const relative = path.relative(cwd, absolute);
+  const inside = !relative.startsWith("..") && !path.isAbsolute(relative);
+  if (inside && !/\s/.test(relative)) return `@${relative} `;
+  return /\s/.test(absolute) ? `"${absolute}" ` : `${absolute} `;
+}

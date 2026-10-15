@@ -20,6 +20,12 @@ export const PERMISSION_MODES: readonly PermissionMode[] = ["ask", "accept-edits
 
 export type ApprovalAnswer = "allow" | "deny" | "always";
 
+/** A richer answer: a denial can carry the user's own words about what to do instead. */
+export interface ApprovalDecision {
+  answer: ApprovalAnswer;
+  feedback?: string;
+}
+
 export interface ApprovalRequest {
   tool: string;
   args: Record<string, unknown>;
@@ -27,9 +33,11 @@ export interface ApprovalRequest {
   summary: string;
   /** Why we are asking. */
   reason: string;
+  /** What choosing "always" would allow, worded for a menu option. */
+  alwaysLabel?: string;
 }
 
-export type Approver = (request: ApprovalRequest) => Promise<ApprovalAnswer>;
+export type Approver = (request: ApprovalRequest) => Promise<ApprovalAnswer | ApprovalDecision>;
 
 export interface PermissionOptions {
   mode: PermissionMode;
@@ -87,6 +95,12 @@ export class PermissionManager {
 
   rules(): { allow: string[]; deny: string[] } {
     return { allow: [...this.allowRules], deny: [...this.denyRules] };
+  }
+
+  addDenyRule(rule: string): void {
+    if (!this.denyRules.includes(rule)) {
+      this.denyRules.push(rule);
+    }
   }
 
   addAllowRule(rule: string): void {
@@ -195,26 +209,41 @@ export class PermissionManager {
     }
 
     const approver = this.approver;
-    const answer = await this.enqueue(() =>
+    const raw = await this.enqueue(() =>
       approver({
         tool: call.name,
         args: call.arguments,
         summary: evaluation.summary,
         reason: evaluation.reason,
+        alwaysLabel: this.alwaysLabel(call.name, call.arguments),
       }),
     );
+    const decision: ApprovalDecision = typeof raw === "string" ? { answer: raw } : raw;
 
-    if (answer === "deny") {
-      return { allow: false, reason: "The user declined this action. Do not retry it; ask what they would prefer instead." };
+    if (decision.answer === "deny") {
+      const said = decision.feedback?.trim();
+      return {
+        allow: false,
+        reason: said
+          ? `The user declined this action and said: "${said}". Do not retry it as written; follow their guidance.`
+          : "The user declined this action. Do not retry it; ask what they would prefer instead.",
+      };
     }
-    if (answer === "always") {
-      this.addAllowRule(
-        call.name === "shell"
-          ? `shell(${commandPrefix(String(call.arguments.command ?? ""))}*)`
-          : call.name,
-      );
+    if (decision.answer === "always") {
+      if (EDIT_TOOLS.has(call.name)) {
+        // "Allow all edits this session" is exactly what accept-edits mode means.
+        if (this.mode === "ask") this.mode = "accept-edits";
+      } else {
+        this.addAllowRule(call.name === "shell" ? `shell(${commandPrefix(String(call.arguments.command ?? ""))}*)` : call.name);
+      }
     }
     return { allow: true };
+  }
+
+  private alwaysLabel(tool: string, args: Record<string, unknown>): string {
+    if (EDIT_TOOLS.has(tool)) return "Yes, and allow all edits this session";
+    if (tool === "shell") return `Yes, and don't ask again for \`${commandPrefix(String(args.command ?? ""))}*\``;
+    return `Yes, and don't ask again for ${tool}`;
   }
 
   private enqueue<T>(task: () => Promise<T>): Promise<T> {

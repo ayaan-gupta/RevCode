@@ -9,20 +9,29 @@
 
 import { stdin as input } from "node:process";
 import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { CliArgs } from "../cli.js";
-import type { LlmToolCall } from "../llm/client.js";
+import { loadConfig } from "../config/config.js";
+import { loadInstructions } from "../config/instructions.js";
+import { resolveProvider, type LlmToolCall } from "../llm/client.js";
 import { DEFAULT_PROFILE } from "../harness/profile.js";
 import { buildSystemPrompt as buildPrompt } from "../harness/prompt.js";
 import { expandCommand, findCommand, parseSlashInput } from "../skills/index.js";
-import { createTerminalApprover } from "../tui/approval.js";
-import { renderDiff } from "../tui/format.js";
-import { expandMentions } from "../tui/mentions.js";
-import { readBoxedInput } from "../tui/input.js";
+import { confirmYesNo, createTerminalApprover } from "../tui/approval.js";
+import { createCompleter, FileIndex } from "../tui/completion.js";
+import { LineEditor } from "../tui/editor.js";
+import { formatDuration, formatTokens, plural, sanitizeForDisplay } from "../tui/fmt.js";
+import { HistoryStore, historyFileFor } from "../tui/history.js";
+import { explainError } from "../tui/errors.js";
+import { expandMentions, pastedPathToMention } from "../tui/mentions.js";
 import { TerminalRenderer } from "../tui/render.js";
-import { registerSlashCommands } from "../tui/slash-commands.js";
-import type { SpinnerHandle } from "../tui/spinner.js";
+import { renderDiffView } from "../tui/diff-view.js";
+import { builtinSlashCommands, type SlashCommand } from "../tui/slash-commands.js";
+import { detectCaps, Style, type TermCaps } from "../tui/style.js";
+import { activityLabel } from "../tui/tool-view.js";
+import { PlainUI, TerminalUI, type Ui } from "../tui/ui.js";
 import { truncateToConsistent } from "../universe/recorder.js";
-import { formatReceipt, type Receipt } from "../universe/receipts.js";
+import type { Receipt } from "../universe/receipts.js";
 import {
   describeUniverse,
   formatCheckpoints,
@@ -31,6 +40,8 @@ import {
   landFlow,
 } from "../universe/ui.js";
 import { Universe } from "../universe/universe.js";
+import { VERSION } from "../version.js";
+import { runCommand, suggestedModels, type CommandContext } from "./commands.js";
 import { estimateTokens } from "./context.js";
 import { segmentToolCalls, type EngineObserver, type TrajectoryEvent, type TurnResult } from "./engine.js";
 import { PERMISSION_MODES, type PermissionMode } from "./permissions.js";
@@ -59,25 +70,72 @@ export function buildSystemPrompt(args: Pick<CliArgs, "cwd">): string {
   return buildPrompt({ cwd: args.cwd, profile: DEFAULT_PROFILE });
 }
 
+const UNIVERSE_COMMANDS = new Set(["/diff", "/land", "/checkpoints", "/rewind", "/fork", "/universes", "/discard"]);
+
 export class Agent {
   private args: CliArgs;
-  private readonly renderer: TerminalRenderer;
   private readonly interactive: boolean;
   private currentModel: string;
   private runtime?: Runtime;
-  private activeSpinner: SpinnerHandle | undefined;
+  private readonly caps: TermCaps;
+  private readonly style: Style;
+  private readonly ui: Ui;
+  private readonly renderer: TerminalRenderer;
+  private readonly files: FileIndex | undefined;
   private turnAbort?: AbortController;
   private lastSigint = 0;
   private lastReceipt?: Receipt;
   private resumed?: SessionSnapshot;
   private sessionCreatedAt = new Date().toISOString();
+  private readonly startedAt = Date.now();
   private disposed = false;
+  /** Text the model should see with the next prompt (e.g. the output of a `!command`). */
+  private pendingContext: string[] = [];
+  private initialMode: PermissionMode = "ask";
 
   constructor(args: CliArgs) {
     this.args = args;
     this.interactive = !args.headless;
     this.currentModel = args.model;
-    this.renderer = new TerminalRenderer(args, process.stdout.isTTY);
+
+    const tty = Boolean(process.stdin.isTTY && process.stdout.isTTY) && process.env.TERM !== "dumb";
+    this.caps = detectCaps(process.env, Boolean(process.stdout.isTTY), args.theme === "auto" ? undefined : args.theme);
+    this.style = new Style(this.caps);
+
+    if (this.interactive && tty) {
+      const history = new HistoryStore(historyFileFor(args.cwd));
+      this.files = new FileIndex(args.cwd);
+      void this.files.load();
+      const editor = new LineEditor({
+        history: history.entries(),
+        completer: createCompleter({ commands: () => this.slashCommands(), files: this.files }),
+        transformPaste: (text) => pastedPathToMention(text, this.args.cwd),
+      });
+      this.ui = new TerminalUI({
+        stdin: process.stdin,
+        stdout: process.stdout,
+        style: this.style,
+        editor,
+        history,
+        status: () => this.renderer.statusModel(),
+        hooks: {
+          onInterrupt: () => this.interruptTurn(),
+          onForceExit: () => {
+            this.dispose();
+            process.exit(130);
+          },
+          onCycleMode: () => this.cycleMode(),
+          onToggleVerbose: () => {
+            const on = this.renderer.toggleVerbose();
+            this.ui.hint(on ? "Detailed tool output on" : "Detailed tool output off");
+          },
+        },
+        title: `revcode · ${path.basename(args.cwd) || args.cwd}`,
+      });
+    } else {
+      this.ui = new PlainUI({ stdin: process.stdin, stdout: process.stdout, columns: process.stdout.columns });
+    }
+    this.renderer = new TerminalRenderer(args.cwd, args.model, this.ui, this.style, { verbose: args.verbose });
     this.registerShutdownHandlers();
   }
 
@@ -92,6 +150,7 @@ export class Agent {
       return;
     }
     this.disposed = true;
+    this.ui.unmount();
     void this.runtime?.dispose();
   }
 
@@ -104,12 +163,12 @@ export class Agent {
       });
     }
     process.on("SIGINT", () => {
+      // Raw-mode Ctrl+C never raises SIGINT; this is for `kill -INT` and non-TTY sessions.
       const now = Date.now();
       if (this.turnAbort && !this.turnAbort.signal.aborted && now - this.lastSigint > 3000) {
         this.lastSigint = now;
-        this.turnAbort.abort();
-        this.runtime?.tools.interruptShell();
-        this.renderer.info("\nInterrupted. Press Ctrl-C again within 3s to quit.");
+        this.interruptTurn();
+        this.renderer.dimInfo("Interrupted. Send SIGINT again within 3s to quit.");
         return;
       }
       this.dispose();
@@ -136,7 +195,7 @@ export class Agent {
     }
     if (this.runtime) {
       const switched = this.runtime.switchModel(trimmed);
-      this.renderer.info(`Profile: ${switched.profileSource}`);
+      this.renderer.dimInfo(`Profile: ${switched.profileSource}`);
     }
     this.currentModel = trimmed;
     this.args = { ...this.args, model: trimmed };
@@ -154,6 +213,22 @@ export class Agent {
     return { finalContent: turn.finalContent, turn, trajectory: [...runtime.engine.trajectory], universeId: runtime.universe?.id };
   }
 
+  private interruptTurn(): void {
+    this.turnAbort?.abort();
+    this.runtime?.tools.interruptShell();
+  }
+
+  private cycleMode(): void {
+    const rt = this.runtime;
+    if (!rt) return;
+    const order: PermissionMode[] = this.initialMode === "yolo" ? ["yolo", "ask", "accept-edits", "plan"] : ["ask", "accept-edits", "plan"];
+    const current = rt.permissions.getMode();
+    const next = order[(order.indexOf(current) + 1) % order.length] ?? "ask";
+    rt.permissions.setMode(next);
+    this.refreshStatus();
+    this.ui.hint(`Mode: ${next}`);
+  }
+
   // --- runtime ----------------------------------------------------------------
 
   private async ensureRuntime(task?: string): Promise<Runtime> {
@@ -161,9 +236,9 @@ export class Agent {
       return this.runtime;
     }
     const observer = this.interactive ? this.interactiveObserver() : this.headlessObserver();
-    const approver = this.interactive ? createTerminalApprover(this.renderer) : undefined;
+    const approver = this.interactive && this.ui.interactive ? createTerminalApprover({ renderer: this.renderer, cwd: () => this.runtime?.cwd ?? this.args.cwd }) : undefined;
     const warn = (message: string): void => {
-      if (this.interactive) this.renderer.info(`! ${message}`);
+      if (this.interactive) this.renderer.warn(message);
       else process.stderr.write(`[revcode] ${message}\n`);
     };
 
@@ -183,18 +258,20 @@ export class Agent {
       observer,
       approver,
       warn,
-      confirm: this.interactive && approver
-        ? async (question) => {
-            const answer = await approver({ tool: "trust", args: {}, summary: question, reason: "Project trust" });
-            return answer !== "deny";
-          }
-        : undefined,
+      confirm:
+        this.interactive && this.ui.interactive
+          ? (question) => {
+              const [first, ...detail] = question.split("\n");
+              return confirmYesNo(this.renderer, first, detail);
+            }
+          : undefined,
       sessionId: this.resumed?.meta.id,
       initialMessages: this.resumed?.messages,
       universe,
       task,
     });
-    registerSlashCommands(this.runtime.commands.map((c) => ({ command: `/${c.name}`, description: c.description })));
+    this.initialMode = this.runtime.permissions.getMode();
+    this.renderer.setModeSource(() => this.runtime?.permissions.getMode() ?? "ask");
     this.refreshStatus();
     return this.runtime;
   }
@@ -202,9 +279,26 @@ export class Agent {
   private refreshStatus(): void {
     const rt = this.runtime;
     if (!rt) return;
-    const parts: string[] = [rt.permissions.getMode()];
-    if (rt.universe) parts.push(`universe ${rt.universe.id}`);
-    this.renderer.setStatusLabel(parts.join(" · "));
+    this.renderer.setExtras(rt.universe ? [this.style.paint("accent", `${this.style.unicode ? "⌬" : "#"} universe ${rt.universe.id}`)] : []);
+    this.renderer.setMode(rt.permissions.getMode());
+  }
+
+  /** Built-in plus custom commands, as the prompt's completion menu and /help see them. */
+  private slashCommands(): SlashCommand[] {
+    const rt = this.runtime;
+    const builtins = builtinSlashCommands({
+      models: () => suggestedModels(rt?.provider ?? "zai"),
+      modes: () => [...PERMISSION_MODES],
+      sessions: () =>
+        listSessions({ cwd: this.args.cwd })
+          .slice(0, 12)
+          .map((s) => s.id),
+    });
+    const taken = new Set(builtins.map((c) => c.command));
+    const custom = (rt?.commands ?? [])
+      .filter((c) => !taken.has(`/${c.name}`))
+      .map((c) => ({ command: `/${c.name}`, description: c.description, ...(c.argumentHint ? { args: c.argumentHint } : {}) }));
+    return [...builtins, ...custom];
   }
 
   // --- headless ---------------------------------------------------------------
@@ -283,36 +377,35 @@ export class Agent {
   // --- interactive ------------------------------------------------------------
 
   private interactiveObserver(): EngineObserver {
+    const started = new Map<string, { at: number; modal: number }>();
     return {
-      llmStart: () => {
-        this.activeSpinner = this.renderer.startThinking();
-      },
-      textDelta: (text) => {
-        this.stopSpinner();
-        this.renderer.streamAssistant(text);
-      },
+      textDelta: (text) => this.renderer.streamDelta(text),
       llmEnd: ({ content, streamed }) => {
         if (this.renderer.isStreaming()) {
-          this.renderer.endStream();
-        } else {
-          this.stopSpinner();
-          if (content && !streamed) this.renderer.assistant(content);
+          this.renderer.streamEnd();
+        } else if (content && !streamed) {
+          this.renderer.assistant(content);
         }
-        this.stopSpinner();
       },
       toolCall: (call) => {
-        this.stopSpinner();
-        this.renderer.toolCall(call.name, call.arguments);
+        this.renderer.streamEnd();
+        started.set(call.id, { at: Date.now(), modal: this.ui.modalMs() });
+        this.ui.beginTool(call.id, activityLabel(call));
       },
       toolResult: (call, result) => {
+        this.ui.endTool(call.id);
+        // Time spent waiting for the user to answer a permission prompt is not the tool's time.
+        const begun = started.get(call.id);
+        const duration = begun ? Date.now() - begun.at - (this.ui.modalMs() - begun.modal) : 0;
+        started.delete(call.id);
         if (call.name === "update_plan" && isPlanResult(result)) {
           this.renderer.plan(result.steps);
         } else {
-          this.renderer.toolResult(call.name, result);
+          this.renderer.toolCard(call, result, duration);
         }
       },
-      compaction: (removed) => this.renderer.info(`Compacted context (~${removed} tokens reclaimed).`),
-      notice: (message) => this.renderer.info(message),
+      compaction: (removed) => this.renderer.dimInfo(`Compacted context (~${formatTokens(removed)} tokens reclaimed).`),
+      notice: (message) => this.renderer.dimInfo(message),
     };
   }
 
@@ -320,31 +413,50 @@ export class Agent {
     if (this.args.resume !== undefined) {
       this.loadResume();
     }
-    this.renderer.welcome();
-    const runtime = await this.ensureRuntime();
+    this.renderer.welcome({
+      version: VERSION,
+      model: this.currentModel,
+      provider: resolveProvider(this.args.provider, this.currentModel),
+      cwd: this.args.cwd,
+    });
+    this.ui.mount();
 
-    const info: string[] = [`Profile: ${runtime.profileSource} · mode: ${runtime.permissions.getMode()}`];
-    if (runtime.universe) {
-      info.push(`Universe ${runtime.universe.id} — changes stay isolated until you /land them.`);
+    this.ui.setBusy(true, "Starting…");
+    let runtime: Runtime;
+    try {
+      runtime = await this.ensureRuntime();
+    } finally {
+      this.ui.setBusy(false);
     }
-    if (this.resumed) {
-      info.push(`Resumed session ${this.resumed.meta.id} (${this.resumed.meta.title}).`);
-    }
-    for (const line of info) this.renderer.info(this.renderer.isRich() ? `\x1b[2m${line}\x1b[0m` : line);
+    this.showSessionInfo(runtime);
 
     while (true) {
-      const userInput = await readBoxedInput({ renderer: this.renderer });
-      if (userInput === null || shouldExit(userInput)) {
+      const next = await this.ui.nextInput();
+      if (next.type === "eof" || shouldExit(next.text)) {
         break;
       }
-      if (await this.handleSlashCommand(userInput)) {
-        continue;
-      }
-      await this.interactiveTurn(userInput);
+      await this.handleInput(next.text, next.display);
     }
 
+    this.ui.unmount();
     await this.exitSummary();
-    this.renderer.goodbye();
+  }
+
+  private showSessionInfo(runtime: Runtime): void {
+    const parts: string[] = [];
+    const instructions = this.args.instructions === false ? [] : loadInstructions(this.args.cwd).files;
+    if (instructions.length > 0) parts.push(instructions.map((f) => path.basename(f)).filter((v, i, all) => all.indexOf(v) === i).join(" + "));
+    const mcp = (runtime.mcp?.statuses() ?? []).filter((s) => s.state === "connected").length;
+    if (mcp > 0) parts.push(`${mcp} MCP`);
+    if (runtime.skills.length > 0) parts.push(plural(runtime.skills.length, "skill"));
+    if (runtime.profileSource !== "default") parts.push(`${runtime.profileSource} profile`);
+    if (parts.length > 0) this.renderer.dimInfo(`Loaded: ${parts.join(" · ")}`);
+    if (runtime.universe) {
+      this.renderer.info(`${this.style.paint("accent", "Universe")} ${runtime.universe.id} — changes stay isolated until you /land them.`);
+    }
+    if (this.resumed) {
+      this.renderer.success(`Resumed session ${this.resumed.meta.id} (${this.resumed.meta.title}).`);
+    }
   }
 
   private loadResume(): void {
@@ -352,7 +464,7 @@ export class Agent {
     const id = wanted || latestSession(this.args.cwd)?.id;
     const snapshot = id ? loadSession(id) : undefined;
     if (!snapshot) {
-      this.renderer.info(id ? `Session ${id} not found; starting fresh.` : "No previous session in this directory; starting fresh.");
+      this.renderer.dimInfo(id ? `Session ${id} not found; starting fresh.` : "No previous session in this directory; starting fresh.");
       return;
     }
     this.resumed = snapshot;
@@ -362,7 +474,50 @@ export class Agent {
     }
   }
 
-  private async interactiveTurn(rawInput: string): Promise<void> {
+  /** Route one submitted line: shell mode, slash command, or a prompt for the model. */
+  private async handleInput(text: string, display: string): Promise<void> {
+    const trimmed = text.trim();
+    this.renderer.echoUser(display);
+    try {
+      if (trimmed.startsWith("!") && trimmed.length > 1) {
+        await this.runUserShell(trimmed.slice(1).trim());
+        return;
+      }
+      if (trimmed.startsWith("/") && (await this.handleSlashCommand(trimmed))) {
+        return;
+      }
+      await this.interactiveTurn(text, display);
+    } catch (error) {
+      this.renderer.error(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  /** `!command`: the user runs a shell command directly; the model hears about it next turn. */
+  private async runUserShell(command: string): Promise<void> {
+    if (!command) return;
+    const rt = await this.ensureRuntime();
+    const call = { name: "shell", arguments: { command } };
+    const started = Date.now();
+    const id = `user-shell-${started}`;
+    this.ui.setBusy(true);
+    this.ui.beginTool(id, activityLabel(call));
+    let result: unknown;
+    try {
+      result = await rt.tools.execute("shell", { command });
+    } catch (error) {
+      result = { error: error instanceof Error ? error.message : String(error) };
+    } finally {
+      this.ui.endTool(id);
+      this.ui.setBusy(false);
+    }
+    this.renderer.toolCard(call, result, Date.now() - started);
+    const record = (result ?? {}) as { stdout?: string; exitCode?: number; error?: string };
+    const output = sanitizeForDisplay(record.stdout ?? record.error ?? "");
+    const clipped = output.length > 4000 ? `${output.slice(0, 2000)}\n…\n${output.slice(-2000)}` : output;
+    this.pendingContext.push(`[The user ran \`${command}\` in the shell themselves${record.exitCode !== undefined ? ` (exit ${record.exitCode})` : ""}. Output:\n${clipped}\n]`);
+  }
+
+  private async interactiveTurn(rawInput: string, _display?: string): Promise<void> {
     const rt = await this.ensureRuntime();
     let prompt = rawInput;
 
@@ -370,7 +525,7 @@ export class Agent {
       rt.hooks.resetStopContinuations();
       const checked = await rt.hooks.runUserPromptSubmit(rawInput);
       if (checked.blocked) {
-        this.renderer.info(`Prompt blocked by hook: ${checked.blocked}`);
+        this.renderer.warn(`Prompt blocked by hook: ${checked.blocked}`);
         return;
       }
       if (checked.context) prompt = `${prompt}\n\n${checked.context}`;
@@ -381,33 +536,70 @@ export class Agent {
     const mentions = expandMentions(prompt, rt.cwd);
     prompt = mentions.text;
     if (mentions.files.length > 0) {
-      this.renderer.info(`Attached: ${mentions.files.join(", ")}`);
+      this.renderer.dimInfo(`Attached: ${mentions.files.join(", ")}`);
+    }
+    if (this.pendingContext.length > 0) {
+      prompt = `${this.pendingContext.join("\n\n")}\n\n${prompt}`;
+      this.pendingContext = [];
     }
 
-    this.renderer.beginTurn(rawInput);
     const controller = new AbortController();
     this.turnAbort = controller;
+    this.ui.setBusy(true);
 
     let outcome;
     try {
       outcome = await runTrackedTurn(rt, prompt, { signal: controller.signal, recordedPrompt: rawInput });
     } finally {
       this.turnAbort = undefined;
-      this.stopSpinner();
+      this.renderer.streamEnd();
+      this.ui.setBusy(false);
     }
     const { result, receipt, receiptLines } = outcome;
     if (result.stopReason === "error") {
-      this.renderer.error(`Request failed: ${result.error ?? "unknown error"}`);
+      const explained = explainError(result.error ?? "unknown error", rt.provider);
+      this.renderer.error(explained.headline);
+      if (explained.hint) this.renderer.dimInfo(`  ${explained.hint}`);
     } else if (result.stopReason === "aborted") {
-      this.renderer.info("Turn aborted.");
+      this.renderer.dimInfo("Interrupted — tell RevCode what to do differently.");
+    } else if (result.stopReason === "max_iterations") {
+      this.renderer.warn(`Stopped after ${result.iterations} tool-loop iterations. Say "continue" to keep going.`);
     }
 
     this.lastReceipt = receipt;
     if (result.toolCalls > 0) {
       this.renderer.receipt(receiptLines);
     }
+    this.renderer.turnSummary({
+      durationMs: result.durationMs,
+      toolCalls: result.toolCalls,
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      stopReason: result.stopReason,
+    });
     this.saveSessionSnapshot(rt);
     this.renderer.setContextPercent((rt.engine.estimatedTokens() / rt.profile.contextLimit) * 100);
+    if (result.durationMs > 10_000) this.ui.notify("RevCode finished");
+    if (rt.permissions.getMode() === "plan" && result.stopReason === "complete" && result.finalContent.trim().length >= 200) {
+      await this.offerPlanExecution(rt);
+    }
+  }
+
+  /** In plan mode, a finished plan is followed by the choice to carry it out. */
+  private async offerPlanExecution(rt: Runtime): Promise<void> {
+    const { style } = this;
+    const choice = await this.ui.select({
+      title: [`${style.paint("accent", style.glyphs.bullet)} ${style.bold("Ready to carry out this plan?")}`],
+      options: [{ label: "Yes, and accept edits automatically" }, { label: "Yes, but ask before each change" }, { label: "No, keep planning" }],
+      hotkeys: { y: 0, n: 2 },
+      cancelIndex: 2,
+    });
+    if (choice !== 0 && choice !== 1) return;
+    rt.permissions.setMode(choice === 0 ? "accept-edits" : "ask");
+    this.refreshStatus();
+    const prompt = "Go ahead and implement the plan.";
+    this.renderer.echoUser(prompt);
+    await this.interactiveTurn(prompt);
   }
 
   private saveSessionSnapshot(rt: Runtime): void {
@@ -432,25 +624,71 @@ export class Agent {
   }
 
   private async exitSummary(): Promise<void> {
-    const universe = this.runtime?.universe;
-    if (!universe || universe.meta.status !== "active") return;
-    try {
-      const stat = await universe.diffStat();
-      if (stat.files > 0) {
-        this.renderer.info(
-          `Universe ${universe.id} holds ${stat.files} unlanded file change${stat.files === 1 ? "" : "s"} (+${stat.insertions} −${stat.deletions}).\n  Review: revcode universes diff ${universe.id}\n  Land:   revcode universes land ${universe.id}\n  Resume: revcode -r ${this.runtime?.sessionId}`,
-        );
+    const rt = this.runtime;
+    const universe = rt?.universe;
+    if (universe && universe.meta.status === "active") {
+      try {
+        const stat = await universe.diffStat();
+        if (stat.files > 0) {
+          this.renderer.info(
+            `Universe ${universe.id} holds ${plural(stat.files, "unlanded file change")} (+${stat.insertions} ${this.style.glyphs.minus}${stat.deletions}).\n  Review: revcode universes diff ${universe.id}\n  Land:   revcode universes land ${universe.id}\n  Resume: revcode -r ${rt?.sessionId}`,
+          );
+        }
+      } catch {
+        // best effort
       }
-    } catch {
-      // best effort
     }
+    let summary: string | undefined;
+    if (rt && rt.turn.value > 0) {
+      const usage = rt.engine.stats.usage;
+      summary = `${plural(rt.turn.value, "turn")} ${this.style.glyphs.dot} ${formatTokens(usage.inputTokens)} in ${this.style.glyphs.dot} ${formatTokens(usage.outputTokens)} out ${this.style.glyphs.dot} ${formatDuration(Date.now() - this.startedAt)}`;
+    }
+    this.renderer.goodbye(summary);
+    if (rt && rt.turn.value > 0 && !rt.universe) this.renderer.dimInfo(`Resume with: revcode -r ${rt.sessionId}`);
   }
 
   // --- slash commands ---------------------------------------------------------
 
+  private commandContext(rt: Runtime): CommandContext {
+    const loaded = loadConfig(this.args.cwd);
+    return {
+      rt,
+      args: this.args,
+      renderer: this.renderer,
+      style: this.style,
+      caps: this.caps,
+      startedAt: this.startedAt,
+      configFiles: loaded.files,
+      configWarnings: loaded.warnings,
+      slashCommands: () => this.slashCommands(),
+      getModel: () => this.currentModel,
+      setModel: (model) => this.setModel(model),
+      getLastReceipt: () => this.lastReceipt,
+      runPrompt: (prompt, display) => this.interactiveTurn(prompt, display),
+      adoptSession: (snapshot) => this.adoptSession(rt, snapshot),
+      refreshStatus: () => this.refreshStatus(),
+    };
+  }
+
+  /** Swap the running conversation for a saved one (`/resume`). */
+  private adoptSession(rt: Runtime, snapshot: SessionSnapshot): void {
+    const rest = snapshot.messages.filter((m) => m.role !== "system");
+    rt.engine.messages.splice(1, Math.max(0, rt.engine.messages.length - 1), ...rest);
+    rt.sessionId = snapshot.meta.id;
+    rt.turn.value = snapshot.meta.turns;
+    this.sessionCreatedAt = snapshot.meta.createdAt;
+    this.renderer.setContextPercent((rt.engine.estimatedTokens() / rt.profile.contextLimit) * 100);
+    this.renderer.success(`Resumed “${snapshot.meta.title}” — ${plural(rest.length, "message")}.`);
+    const lastUser = [...rest].reverse().find((m) => m.role === "user" && !m.content.startsWith("[harness]"));
+    const lastAssistant = [...rest].reverse().find((m) => m.role === "assistant" && m.content.trim().length > 0);
+    if (lastUser) this.renderer.echoUser(lastUser.content.split("\n")[0].slice(0, 200));
+    if (lastAssistant) this.renderer.assistant(lastAssistant.content);
+  }
+
   private async handleSlashCommand(line: string): Promise<boolean> {
     const trimmed = line.trim();
-    if (!trimmed.startsWith("/")) {
+    // "/usr/bin/foo is missing" is a message, not a command.
+    if (!/^\/[A-Za-z][\w:.-]*(\s|$)/.test(trimmed)) {
       return false;
     }
     const [rawName, ...rest] = trimmed.split(/\s+/);
@@ -458,132 +696,30 @@ export class Agent {
     const arg = rest.join(" ").trim();
     const rt = await this.ensureRuntime();
 
-    switch (name) {
-      case "/help":
-        this.renderer.info(this.helpText(rt));
-        return true;
-      case "/memory":
-        this.renderer.info(JSON.stringify(rt.engine.messages, null, 2));
-        return true;
-      case "/tools":
-        this.renderer.info(JSON.stringify(rt.tools.definitions(), null, 2));
-        return true;
-      case "/tokens": {
-        const used = rt.engine.estimatedTokens();
-        const limit = rt.profile.contextLimit;
-        const real = rt.engine.stats.usage;
-        this.renderer.info(
-          `Context: ~${used.toLocaleString()} / ${limit.toLocaleString()} est. tokens (${Math.round((used / limit) * 100)}%).` +
-            (real.inputTokens > 0 ? `\nSession usage: ${real.inputTokens.toLocaleString()} in (${(real.cachedInputTokens ?? 0).toLocaleString()} cached) · ${real.outputTokens.toLocaleString()} out · ${rt.engine.stats.apiCalls} calls` : ""),
-        );
-        return true;
-      }
-      case "/compact": {
-        const result = rt.engine.compactNow();
-        this.renderer.info(result.compacted ? `Compacted context (~${result.removedTokens} tokens reclaimed).` : "Nothing to compact yet.");
-        return true;
-      }
-      case "/clear":
-        rt.engine.reset();
-        this.renderer.info("Conversation cleared.");
-        return true;
-      case "/model":
-        this.handleModelCommand(arg);
-        return true;
-      case "/mode":
-        this.handleModeCommand(rt, arg);
-        return true;
-      case "/plan":
-        this.handleModeCommand(rt, rt.permissions.getMode() === "plan" ? "ask" : "plan");
-        return true;
-      case "/profile":
-        this.renderer.info(`Profile source: ${rt.profileSource}\n${JSON.stringify(rt.profile, null, 2)}`);
-        return true;
-      case "/sessions": {
-        const sessions = listSessions({ cwd: this.args.cwd }).slice(0, 15);
-        this.renderer.info(
-          sessions.length === 0
-            ? "No saved sessions for this directory."
-            : sessions.map((s) => `${s.id}  ${s.updatedAt.slice(0, 16).replace("T", " ")}  ${s.model}  ${s.title}`).join("\n") + "\nResume with: revcode -r <id>",
-        );
-        return true;
-      }
-      case "/receipt":
-        this.renderer.info(this.lastReceipt ? receiptDetails(this.lastReceipt) : "No receipt yet — run a task first.");
-        return true;
-      case "/diff":
-      case "/land":
-      case "/checkpoints":
-      case "/rewind":
-      case "/fork":
-      case "/universes":
-      case "/discard":
-        await this.handleUniverseCommand(rt, name, arg);
-        return true;
-      case "/exit":
-      case "/quit":
-        return false;
-      default:
-        return this.handleCustomCommand(rt, name.slice(1), arg);
+    if (name === "/exit" || name === "/quit") {
+      return false;
     }
+    if (UNIVERSE_COMMANDS.has(name)) {
+      await this.handleUniverseCommand(rt, name, arg);
+      return true;
+    }
+    if (await runCommand(this.commandContext(rt), name, arg)) {
+      return true;
+    }
+    return this.handleCustomCommand(rt, name.slice(1), arg);
   }
 
   private async handleCustomCommand(rt: Runtime, name: string, arg: string): Promise<boolean> {
     const parsed = parseSlashInput(`/${name} ${arg}`);
     const command = parsed ? findCommand(rt.commands, parsed.name) : undefined;
     if (!command || !parsed) {
-      this.renderer.info(`Unknown command: /${name}. Type /help for available commands.`);
+      const known = this.slashCommands().map((c) => c.command);
+      const guess = known.find((c) => c.startsWith(`/${name}`)) ?? known.find((c) => c.includes(name));
+      this.renderer.error(`Unknown command: /${name}.${guess ? ` Did you mean ${guess}?` : ""} Type /help for the list.`);
       return true;
     }
     await this.interactiveTurn(expandCommand(command, parsed.args));
     return true;
-  }
-
-  private helpText(rt: Runtime): string {
-    const lines = [
-      "/model [name]   show or switch the model",
-      "/mode [m]       permission mode: ask | accept-edits | plan | yolo   (/plan toggles read-only)",
-      "/tokens /compact /clear /memory /tools /profile /sessions /receipt",
-      rt.universe
-        ? "/diff /land [paths] [--markers|--theirs] /checkpoints /rewind [n] /fork [n] /universes /discard   (Parallel Universe commands)"
-        : "Parallel Universes: restart with `revcode --universe` for isolated, recorded, landable runs.",
-      "/exit           quit",
-    ];
-    if (rt.commands.length > 0) {
-      lines.push(`Custom: ${rt.commands.map((c) => `/${c.name}`).join(" ")}`);
-    }
-    return lines.join("\n");
-  }
-
-  private handleModelCommand(modelArg: string): void {
-    if (!modelArg) {
-      const lines = SUGGESTED_GLM_MODELS.map((model) => `  ${model}${model === this.currentModel ? " (current)" : ""}`);
-      if (!SUGGESTED_GLM_MODELS.includes(this.currentModel as (typeof SUGGESTED_GLM_MODELS)[number])) {
-        lines.push(`  ${this.currentModel} (current)`);
-      }
-      this.renderer.info(["Suggested models:", ...lines, "", "Usage: /model <name>"].join("\n"));
-      return;
-    }
-    try {
-      this.setModel(modelArg);
-      this.renderer.info(`Model switched to ${this.currentModel}.`);
-    } catch (error) {
-      this.renderer.error(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  private handleModeCommand(rt: Runtime, arg: string): void {
-    if (!arg) {
-      this.renderer.info(`Permission mode: ${rt.permissions.getMode()}  (set with /mode ${PERMISSION_MODES.join(" | ")})`);
-      return;
-    }
-    if (!(PERMISSION_MODES as readonly string[]).includes(arg)) {
-      this.renderer.error(`Unknown mode "${arg}". Expected: ${PERMISSION_MODES.join(", ")}.`);
-      return;
-    }
-    rt.permissions.setMode(arg as PermissionMode);
-    this.refreshStatus();
-    this.renderer.info(`Permission mode: ${arg}`);
   }
 
   // --- universe commands --------------------------------------------------------
@@ -608,7 +744,8 @@ export class Agent {
         this.renderer.info(formatChangeSummary(changes).join("\n"));
         if (arg === "full" || arg.startsWith("-")) {
           const diff = await universe.diff(arg === "full" ? [] : []);
-          this.renderer.info(renderDiff(diff.split("\n").slice(0, 400).join("\n"), this.renderer.isRich()));
+          const view = renderDiffView(diff.split("\n").slice(0, 600).join("\n"), { style: this.style, width: this.renderer.contentWidth(), maxRows: 120 });
+          this.renderer.info(view.rows.join("\n"));
         } else if (changes.length > 0) {
           this.renderer.info("(/diff full for the complete diff)");
         }
@@ -618,14 +755,12 @@ export class Agent {
         const flags = arg.split(/\s+/).filter(Boolean);
         const onConflict = flags.includes("--theirs") ? "theirs" : flags.includes("--markers") ? "markers" : "skip";
         const paths = flags.filter((f) => !f.startsWith("--"));
-        const approver = createTerminalApprover(this.renderer);
         const flow = await landFlow(universe, {
           paths,
           onConflict,
           confirm: async (_plan, lines) => {
             this.renderer.info(lines.join("\n"));
-            const answer = await approver({ tool: "land", args: {}, summary: `Apply these changes to ${universe.meta.projectRoot}?`, reason: "Landing a universe" });
-            return answer !== "deny";
+            return confirmYesNo(this.renderer, `Apply these changes to ${universe.meta.projectRoot}?`);
           },
         });
         this.renderer.info(flow.lines.filter((l) => !flow.landed || !l.startsWith("  ") || l.includes("Landed")).join("\n"));
@@ -685,10 +820,8 @@ export class Agent {
         return;
       }
       case "/discard": {
-        const approver = createTerminalApprover(this.renderer);
-        const answer = await approver({ tool: "discard", args: {}, summary: `Throw away universe ${universe.id} and all its changes?`, reason: "Discarding a universe" });
-        if (answer === "deny") {
-          this.renderer.info("Kept.");
+        if (!(await confirmYesNo(this.renderer, `Throw away universe ${universe.id} and all its changes?`))) {
+          this.renderer.dimInfo("Kept.");
           return;
         }
         universe.discard();
@@ -700,11 +833,6 @@ export class Agent {
   }
 
   // --- helpers ------------------------------------------------------------------
-
-  private stopSpinner(): void {
-    this.activeSpinner?.stop();
-    this.activeSpinner = undefined;
-  }
 
   private async resolveHeadlessInstruction(): Promise<string> {
     if (this.args.prompt) {
@@ -731,17 +859,6 @@ export class Agent {
     const lines = this.runtime.engine.trajectory.map((event) => JSON.stringify(event)).join("\n");
     await writeFile(this.args.trajectoryOut, `${lines}\n`, "utf8");
   }
-}
-
-function receiptDetails(receipt: Receipt): string {
-  const lines = [...formatReceipt(receipt), ""];
-  for (const c of receipt.commands.slice(-12)) {
-    lines.push(`  $ ${c.command}  → exit ${c.exitCode ?? "?"}${c.timedOut ? " (timed out)" : ""}`);
-  }
-  for (const f of receipt.files.slice(0, 20)) {
-    lines.push(`  ${f.status} ${f.path}${f.insertions || f.deletions ? `  (+${f.insertions} −${f.deletions})` : ""}`);
-  }
-  return lines.join("\n");
 }
 
 function isPlanResult(result: unknown): result is { steps: Array<{ step: string; status: string }> } {

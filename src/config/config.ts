@@ -7,7 +7,7 @@
  * startup — it produces a warning and is skipped.
  */
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { revcodeHome } from "./paths.js";
 
@@ -31,6 +31,8 @@ export interface RevcodeConfig {
   snapshot?: boolean;
   mcp?: boolean;
   hooks?: boolean;
+  /** Terminal colors: "auto" detects the background, or force "dark" / "light". */
+  theme?: "auto" | "dark" | "light";
 }
 
 export interface LoadedConfig {
@@ -107,6 +109,10 @@ export function validateConfig(raw: unknown): { config: RevcodeConfig; problems:
   str("model");
   str("baseUrl");
   str("profile");
+  if (input.theme !== undefined) {
+    if (input.theme === "auto" || input.theme === "dark" || input.theme === "light") config.theme = input.theme;
+    else problems.push('"theme" must be one of auto, dark, light');
+  }
   positive("maxIterations");
   positive("timeBudgetSec");
   bool("universe");
@@ -152,4 +158,23 @@ export function mergeConfig(base: RevcodeConfig, over: RevcodeConfig): RevcodeCo
         }
       : undefined;
   return { ...base, ...over, ...(permissions ? { permissions } : {}) };
+}
+
+/** Merge `patch` into the user-level config file (`~/.revcode/config.json`), creating it if needed. */
+export function saveUserConfig(patch: Record<string, unknown>): string {
+  const file = path.join(revcodeHome(), "config.json");
+  let current: Record<string, unknown> = {};
+  if (existsSync(file)) {
+    try {
+      const parsed = JSON.parse(readFileSync(file, "utf8")) as unknown;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) current = parsed as Record<string, unknown>;
+    } catch {
+      // A broken file is replaced rather than blocking the setting.
+    }
+  }
+  mkdirSync(path.dirname(file), { recursive: true });
+  const temp = `${file}.${process.pid}.tmp`;
+  writeFileSync(temp, `${JSON.stringify({ ...current, ...patch }, null, 2)}\n`, "utf8");
+  renameSync(temp, file);
+  return file;
 }

@@ -11,6 +11,8 @@ import { workingDirectoryProblem } from "./agent/cwd.js";
 import { HELP_TEXT, parseCommandLine, resolveArgs, type CliArgs } from "./cli.js";
 import { runUniversesCommand } from "./commands/universes.js";
 import { runProfileCommand, runSessionsCommand } from "./commands/misc.js";
+import { missingCredentials, runSetup, runSetupCommand } from "./commands/setup.js";
+import { loadEnvFiles } from "./config/env.js";
 import { loadConfig } from "./config/config.js";
 import { reexecWithEnvProxy } from "./net/env-proxy.js";
 import { VERSION } from "./version.js";
@@ -24,6 +26,7 @@ function withConfig(args: CliArgs): CliArgs {
 }
 
 async function main(): Promise<void> {
+  loadEnvFiles();
   const command = parseCommandLine(process.argv.slice(2));
 
   switch (command.kind) {
@@ -47,8 +50,21 @@ async function main(): Promise<void> {
       process.exitCode = await runTuneCommand(withConfig(command.args), command.options);
       return;
     }
+    case "setup":
+      process.exitCode = await runSetupCommand(withConfig(command.args));
+      return;
     case "run": {
-      const args = withConfig(command.args);
+      let args = withConfig(command.args);
+      if (!args.headless && process.stdin.isTTY && process.stdout.isTTY) {
+        const missing = missingCredentials(args);
+        if (missing) {
+          if (!(await runSetup({ reason: `${missing.message} Let's set one up.` }))) {
+            process.exitCode = 1;
+            return;
+          }
+          args = withConfig(command.args);
+        }
+      }
       const cwdProblem = workingDirectoryProblem(args.cwd);
       if (cwdProblem) {
         console.error(`[revcode] ${cwdProblem}`);

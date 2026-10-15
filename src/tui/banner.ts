@@ -1,7 +1,6 @@
 import figlet from "figlet";
-import { applyHorizontalGradient } from "./ansi.js";
+import type { Style } from "./style.js";
 import { ANSI_SHADOW_FLF } from "./ansi-shadow-font.js";
-import { GRADIENT_END, GRADIENT_MID, GRADIENT_START } from "./theme.js";
 
 const BANNER_FONT = "ANSI Shadow";
 
@@ -25,16 +24,9 @@ export function getBannerLines(): string[] {
   return normalizeBannerLines(raw.split("\n"));
 }
 
-/** Banner lines with cyan → purple → pink gradient applied. */
-export function renderBanner(rich: boolean): string[] {
-  const lines = getBannerLines();
-  if (!rich) {
-    return lines;
-  }
-
-  return lines.map((line) =>
-    applyHorizontalGradient(line, GRADIENT_START, GRADIENT_MID, GRADIENT_END, rich),
-  );
+/** Banner lines with the brand gradient applied (plain when the terminal has no color). */
+export function renderBanner(style: Style): string[] {
+  return getBannerLines().map((line) => style.gradient(line));
 }
 
 export function getBannerWidth(): number {

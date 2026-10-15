@@ -23,6 +23,7 @@ import type { FinalGate, ToolCallContext, ToolDecision, ToolMiddleware } from ".
 import type { LlmToolCall } from "../llm/client.js";
 import {
   DEFAULT_HOOK_TIMEOUT_SECONDS,
+  HOOK_EVENTS,
   loadHooksConfig,
   matcherMatches,
   type HookCommandSpec,
@@ -122,6 +123,19 @@ export class HookRunner {
       warnings: loaded.warnings,
       ...(onWarning ? { onWarning } : {}),
     });
+  }
+
+  /** Every configured hook, for display. */
+  summary(): Array<{ event: HookEvent; matcher: string; command: string; timeout?: number }> {
+    const out: Array<{ event: HookEvent; matcher: string; command: string; timeout?: number }> = [];
+    for (const event of HOOK_EVENTS) {
+      for (const group of this.config[event] ?? []) {
+        for (const hook of group.hooks) {
+          out.push({ event, matcher: group.matcher && group.matcher !== "" ? group.matcher : "*", command: hook.command, ...(hook.timeout !== undefined ? { timeout: hook.timeout } : {}) });
+        }
+      }
+    }
+    return out;
   }
 
   hasHooks(event: HookEvent): boolean {

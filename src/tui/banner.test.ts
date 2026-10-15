@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { getBannerLines, getBannerWidth, renderBanner } from "./banner.js";
-import { stripAnsi } from "./ansi.js";
+import { Style } from "./style.js";
+import { stripAnsi } from "./width.js";
 
 describe("banner", () => {
   it("renders non-empty lines", () => {
@@ -29,7 +30,9 @@ describe("banner", () => {
 
   it("applies gradient without changing visible text", () => {
     const plain = getBannerLines();
-    const rich = renderBanner(true).map(stripAnsi);
-    expect(rich).toEqual(plain);
+    const style = new Style({ colorDepth: 24, theme: "dark", unicode: true, hyperlinks: false });
+    const colored = renderBanner(style);
+    expect(colored.join("")).toContain("38;2;");
+    expect(colored.map(stripAnsi)).toEqual(plain);
   });
 });

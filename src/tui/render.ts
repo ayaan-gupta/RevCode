@@ -1,458 +1,368 @@
-import type { CliArgs } from "../cli.js";
-import { dim, rgb, supportsColor } from "./ansi.js";
-import { getBannerWidth, renderBanner } from "./banner.js";
-import { extractDiff, formatToolCall, renderDiff } from "./format.js";
-import { MarkdownStream, renderMarkdown } from "./markdown.js";
-import type { SlashCommand } from "./slash-commands.js";
-import { ThinkingSpinner, type SpinnerHandle } from "./spinner.js";
-import {
-  COLOR_CYAN,
-  COLOR_MUTED,
-  COLOR_PINK,
-  COLOR_PURPLE,
-  COLOR_WHITE,
-} from "./theme.js";
+/**
+ * TerminalRenderer: everything the agent prints, as styled blocks.
+ *
+ * It owns the *look* of the transcript — the user's echo, streamed assistant text, tool
+ * cards, plans, receipts, notices — and hands rows to the `Ui`, which commits them above the
+ * live prompt. Content is indented two columns and separated by single blank lines so the
+ * scrollback reads like a conversation.
+ */
 
-export interface RenderContext {
-  args: CliArgs;
-  rich: boolean;
-}
+import { existsSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
+import { getBannerWidth, renderBanner } from "./banner.js";
+import { formatDuration, formatTokens, plural, sanitizeForDisplay } from "./fmt.js";
+import type { StatusModel } from "./frame.js";
+import { MarkdownStream, renderMarkdownRows } from "./markdown.js";
+import type { Style } from "./style.js";
+import { renderToolCard } from "./tool-view.js";
+import type { Ui } from "./ui.js";
+import { shortenPath } from "./frame.js";
+import { truncate, wrapAnsi } from "./width.js";
+
+const INDENT = "  ";
+const MAX_CONTENT_WIDTH = 116;
 
 const TIPS = [
-  "Ask questions, edit files, or run commands.",
-  "Be specific for the best results.",
-  "Type /help for commands.",
-] as const;
+  "Shift+Enter (or Ctrl+J) inserts a newline; Enter sends.",
+  "Type @ to mention a file — its contents are attached to your message.",
+  "Press Esc to interrupt a running task; messages you type meanwhile are queued.",
+  "Shift+Tab cycles permission modes: ask → accept edits → plan.",
+  "Start with `revcode --universe` to let the agent work in an isolated copy you can review and land.",
+  "Ctrl+R searches your prompt history; Up and Down walk through it.",
+  "Ctrl+O shows more of each tool's output.",
+  "Start a line with ! to run a shell command yourself.",
+  "/init writes an AGENTS.md so RevCode learns your project's conventions.",
+  "/resume reopens an earlier session; /compact frees up context.",
+  "Paste large text freely — it collapses to a placeholder and is sent in full.",
+  "Put project rules in AGENTS.md; they are loaded into every session.",
+];
 
-/** Tools whose results carry a unified diff worth coloring. */
-const DIFF_TOOLS: ReadonlySet<string> = new Set(["write_file", "edit_file", "apply_patch", "edit_anchored"]);
+type Kind = "user" | "text" | "tool" | "meta" | "block";
 
-const INPUT_HINT = "Type your message or @path/to/file";
-const CHEVRON = ">";
+export interface WelcomeInfo {
+  version: string;
+  model: string;
+  provider: string;
+  cwd: string;
+}
+
+export interface TurnSummary {
+  durationMs: number;
+  toolCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  stopReason: string;
+}
 
 export class TerminalRenderer {
-  private args: CliArgs;
-  private readonly rich: boolean;
-  private inputFrameLines = 3;
-  private slashMenuLineCount = 0;
-  private hasInputFrame = false;
-  private hasStatusBar = false;
-  private lastInputCursorColumn = 1;
-  private mdStream: MarkdownStream | undefined;
+  private lastKind: Kind | undefined;
+  private md: MarkdownStream | undefined;
+  private verboseOutput: boolean;
   private contextPercent = 0;
-  private statusLabel = "interactive";
+  private mode = "ask";
+  private modeSource: (() => string) | undefined;
+  private extras: string[] = [];
+  private branchCache: { cwd: string; value: string | undefined; at: number } | undefined;
+  private model: string;
+  private lastAssistantText = "";
+  private streamText = "";
 
-  constructor(args: CliArgs, isTty: boolean) {
-    this.args = args;
-    this.rich = supportsColor(isTty);
+  constructor(
+    private readonly cwd: string,
+    model: string,
+    readonly ui: Ui,
+    readonly style: Style,
+    options: { verbose?: boolean } = {},
+  ) {
+    this.model = model;
+    this.verboseOutput = options.verbose ?? false;
   }
 
-  getContext(): RenderContext {
-    return { args: this.args, rich: this.rich };
-  }
-
-  isRich(): boolean {
-    return this.rich;
-  }
+  // --- state shown in the status line ----------------------------------------------------
 
   updateModel(model: string): void {
-    this.args = { ...this.args, model };
+    this.model = model;
+    this.ui.refresh();
   }
 
-  /** Short mode label shown in the status bar (e.g. "ask", "yolo · universe u2410…"). */
-  setStatusLabel(label: string): void {
-    this.statusLabel = label;
+  setMode(mode: string): void {
+    this.mode = mode;
+    this.ui.refresh();
   }
 
-  /** Update the context-usage gauge shown in the status bar (0–100). */
+  /** Read the permission mode live (it can change mid-turn, e.g. "allow all edits"). */
+  setModeSource(source: () => string): void {
+    this.modeSource = source;
+  }
+
+  /** Extra, pre-styled status segments such as the Parallel Universe id. */
+  setExtras(extras: string[]): void {
+    this.extras = extras;
+    this.ui.refresh();
+  }
+
   setContextPercent(percent: number): void {
     this.contextPercent = Math.max(0, Math.min(100, Math.round(percent)));
+    this.ui.refresh();
   }
 
-  welcome(): void {
-    console.log("");
+  statusModel(): StatusModel {
+    return {
+      cwd: this.cwd,
+      branch: this.gitBranch(),
+      mode: this.modeSource?.() ?? this.mode,
+      model: this.model,
+      contextPercent: this.contextPercent,
+      extra: this.extras,
+    };
+  }
 
-    for (const line of renderBanner(this.rich)) {
-      console.log(line);
+  get verbose(): boolean {
+    return this.verboseOutput;
+  }
+
+  toggleVerbose(): boolean {
+    this.verboseOutput = !this.verboseOutput;
+    return this.verboseOutput;
+  }
+
+  getLastAssistantText(): string {
+    return this.lastAssistantText;
+  }
+
+  private gitBranch(): string | undefined {
+    const now = Date.now();
+    if (this.branchCache && this.branchCache.cwd === this.cwd && now - this.branchCache.at < 5000) return this.branchCache.value;
+    const value = readGitBranch(this.cwd);
+    this.branchCache = { cwd: this.cwd, value, at: now };
+    return value;
+  }
+
+  // --- layout helpers --------------------------------------------------------------------
+
+  contentWidth(): number {
+    return Math.max(30, Math.min(MAX_CONTENT_WIDTH, this.ui.columns - INDENT.length * 2));
+  }
+
+  private indent(rows: string[]): string {
+    return rows.map((row) => (row.length > 0 ? `${INDENT}${row}` : "")).join("\n");
+  }
+
+  /** Print rows as a block of `kind`, with one blank line between blocks of different kinds. */
+  private emit(kind: Kind, rows: string[], options: { indent?: boolean } = {}): void {
+    if (rows.length === 0) return;
+    const separate = this.lastKind !== undefined && (this.lastKind !== kind || kind === "block") && !(kind === "meta" && this.lastKind === "meta");
+    const body = options.indent === false ? rows.join("\n") : this.indent(rows);
+    this.ui.print(separate ? `\n${body}` : body);
+    this.lastKind = kind;
+  }
+
+  // --- welcome / goodbye -------------------------------------------------------------------
+
+  welcome(info: WelcomeInfo): void {
+    const { style } = this;
+    const rows = this.ui.interactive ? process.stdout.rows ?? 24 : 24;
+    const showBanner = this.ui.columns >= getBannerWidth() + 4 && rows >= 30;
+    const lines: string[] = [""];
+    if (showBanner) {
+      lines.push(...renderBanner(style).map((line) => `  ${line}`));
+    } else {
+      lines.push(`  ${style.gradient(`${style.glyphs.prompt} RevCode`)} ${style.dim(`v${info.version}`)}`);
     }
-
-    console.log("");
-    console.log(this.rich ? dim("Tips for getting started:") : "Tips for getting started:");
-
-    TIPS.forEach((tip, index) => {
-      const label = `${index + 1}. ${tip}`;
-      console.log(this.rich ? dim(label) : label);
-    });
-
-    console.log("");
-    console.log(this.formatContextLine());
-    console.log("");
+    lines.push("");
+    if (showBanner) lines.push(`  ${style.dim(`v${info.version}`)}`);
+    const room = Math.max(20, this.ui.columns - info.model.length - info.provider.length - 12);
+    lines.push(`  ${style.paint("accent", info.model)} ${style.dim(`(${info.provider})`)}  ${style.dim(style.glyphs.dot)}  ${style.dim(shortenPath(info.cwd, process.env.HOME, room))}`);
+    const tip = TIPS[Math.floor(Math.random() * TIPS.length)];
+    lines.push(`  ${style.dim(`Tip: ${tip}`)}`);
+    lines.push("");
+    this.ui.print(lines.join("\n"));
+    this.lastKind = "block";
   }
 
-  drawInputBox(
-    text: string,
-    cursor: number,
-    placeholder = INPUT_HINT,
-    slashMenu?: SlashCommand[],
-  ): void {
-    const width = this.frameWidth();
-    const menuLines =
-      slashMenu && slashMenu.length > 0 ? this.formatSlashMenu(slashMenu, width) : [];
-    const top = this.horizontalRule(width);
-    const { line: content, cursorColumn } = this.formatInputLine(text, cursor, placeholder, width);
-    const bottom = this.horizontalRule(width);
+  goodbye(summary?: string): void {
+    const lines = [""];
+    if (summary) lines.push(`  ${this.style.dim(summary)}`);
+    lines.push(`  ${this.style.dim("Bye!")}`, "");
+    this.ui.print(lines.join("\n"));
+  }
 
-    if (this.rich && this.hasInputFrame) {
-      hideCursor();
-      this.moveCursorBelowInputArea();
-      const linesToClear = this.getTotalInputAreaLines();
-      readlineMoveUp(linesToClear);
-      clearLines(linesToClear);
+  // --- the conversation ----------------------------------------------------------------------
+
+  /** Echo the user's message into the transcript. */
+  echoUser(display: string): void {
+    const { style } = this;
+    const width = Math.max(20, this.ui.columns - 4);
+    const rows = wrapAnsi(sanitizeForDisplay(display), width);
+    const body = rows.map((row, i) => (i === 0 ? `${style.paint("prompt", style.glyphs.prompt)} ${style.bold(row)}` : `  ${style.bold(row)}`));
+    this.ui.print(`${this.lastKind === undefined ? "" : "\n"}${body.join("\n")}`);
+    this.lastKind = "user";
+  }
+
+  /** Streamed assistant text. */
+  streamDelta(delta: string): void {
+    if (!this.md) {
+      this.md = new MarkdownStream({ style: this.style, width: this.contentWidth() });
+      this.streamText = "";
+      // A blank line separates the text from whatever came before it.
+      if (this.lastKind !== undefined && this.lastKind !== "text") this.ui.print("");
+      this.lastKind = "text";
     }
-
-    for (const menuLine of menuLines) {
-      process.stdout.write(`${menuLine}\n`);
-    }
-
-    process.stdout.write(`${top}\n${content}\n${bottom}\n`);
-    this.inputFrameLines = 3;
-    this.slashMenuLineCount = menuLines.length;
-    this.hasInputFrame = true;
-    this.lastInputCursorColumn = cursorColumn;
+    this.streamText += delta;
+    this.ui.addTokens(delta.length / 4);
+    const { lines, tail } = this.md.push(delta);
+    if (lines.length > 0) this.ui.print(this.indent(lines));
+    this.ui.setTail(tail.length > 0 ? this.indent(tail.split("\n")) : undefined);
   }
 
-  clearInputArea(): void {
-    if (!this.rich || !this.hasInputFrame) {
-      return;
-    }
-
-    hideCursor();
-    this.moveCursorBelowInputArea();
-    const linesToClear = this.getTotalInputAreaLines();
-    readlineMoveUp(linesToClear);
-    clearLines(linesToClear);
-    showCursor();
-    this.inputFrameLines = 0;
-    this.slashMenuLineCount = 0;
-    this.hasInputFrame = false;
-    this.hasStatusBar = false;
-  }
-
-  renderStatusBar(): void {
-    const cwd = shortenPath(this.args.cwd);
-    const provider = this.args.provider ?? "auto";
-    const modelLabel = `${this.args.model} (${provider})`;
-    const ctx = this.contextPercent > 0 ? `${this.contextPercent}% ctx` : "";
-
-    if (!this.rich) {
-      const ctxPlain = ctx ? `  ${ctx}` : "";
-      process.stdout.write(`${cwd}  ${this.statusLabel}  ${modelLabel}${ctxPlain}\n`);
-      this.hasStatusBar = true;
-      return;
-    }
-
-    const columns = process.stdout.columns ?? 80;
-    const left = rgb(COLOR_CYAN, cwd);
-    const center = rgb(COLOR_PINK, this.statusLabel);
-    const right = rgb(COLOR_PURPLE, ctx ? `${modelLabel}  ·  ${ctx}` : modelLabel);
-    const gap = "  ";
-    const content = `${left}${gap}${center}${gap}${right}`;
-    const padding = Math.max(0, columns - stripVisibleLength(content));
-    process.stdout.write(`${content}${" ".repeat(padding)}\n`);
-    this.hasStatusBar = true;
-    this.positionInputCursor();
-  }
-
-  beginTurn(userMessage: string): void {
-    console.log(this.rich ? dim(`You: ${userMessage}`) : `You: ${userMessage}`);
-  }
-
-  startThinking(): SpinnerHandle {
-    const spinner = new ThinkingSpinner(this.rich);
-    console.log("");
-    return spinner.start();
-  }
-
-  toolCall(name: string, args: Record<string, unknown>): void {
-    console.log(formatToolCall(name, args, this.rich));
-  }
-
-  toolResult(name: string, result: unknown): void {
-    const diff = DIFF_TOOLS.has(name) ? extractDiff(result) : undefined;
-    if (diff) {
-      console.log(renderDiff(diff, this.rich));
-      return;
-    }
-    const summary = summarizeToolResult(name, result);
-    if (!summary) {
-      return;
-    }
-    const line = `    ↳ ${summary}`;
-    console.log(this.rich ? dim(line) : line);
-  }
-
-  // --- streaming assistant output -----------------------------------------
-
-  beginStream(): void {
-    this.mdStream = new MarkdownStream(this.rich);
-    process.stdout.write("\n");
-  }
-
-  streamAssistant(delta: string): void {
-    if (!this.mdStream) {
-      this.beginStream();
-    }
-    process.stdout.write(this.mdStream!.push(delta));
-  }
-
-  endStream(): void {
-    if (!this.mdStream) {
-      return;
-    }
-    const tail = this.mdStream.flush();
-    process.stdout.write(`${tail}\n\n`);
-    this.mdStream = undefined;
+  streamEnd(): void {
+    if (!this.md) return;
+    const rest = this.md.flush();
+    this.md = undefined;
+    this.ui.setTail(undefined);
+    if (rest.length > 0) this.ui.print(this.indent(rest));
+    this.lastAssistantText = this.streamText;
+    this.lastKind = "text";
   }
 
   isStreaming(): boolean {
-    return this.mdStream !== undefined;
+    return this.md !== undefined;
+  }
+
+  /** A complete (non-streamed) assistant message. */
+  assistant(text: string): void {
+    if (text.trim().length === 0) return;
+    this.lastAssistantText = text;
+    this.emit("text", renderMarkdownRows(sanitizeForDisplay(text), { style: this.style, width: this.contentWidth() }));
+  }
+
+  toolCard(call: { name: string; arguments: Record<string, unknown> }, result: unknown, durationMs?: number): void {
+    const rows = renderToolCard(call, result, { style: this.style, width: this.contentWidth(), verbose: this.verboseOutput, durationMs });
+    this.emit("tool", rows);
   }
 
   plan(steps: Array<{ step: string; status: string }>): void {
-    if (steps.length === 0) {
-      return;
-    }
-    console.log("");
-    console.log(this.rich ? rgb(COLOR_PURPLE, "  Plan") : "  Plan");
+    if (steps.length === 0) return;
+    const { style } = this;
+    const done = steps.filter((s) => s.status === "completed").length;
+    const rows = [`${style.bold(style.paint("heading", "Plan"))} ${style.dim(`${done}/${steps.length}`)}`];
     for (const { step, status } of steps) {
-      const marker = status === "completed" ? "✔" : status === "in_progress" ? "▸" : "○";
-      const text = `  ${marker} ${step}`;
-      if (!this.rich) {
-        console.log(text);
-        continue;
-      }
-      if (status === "completed") {
-        console.log(dim(text));
-      } else if (status === "in_progress") {
-        console.log(rgb(COLOR_CYAN, text));
-      } else {
-        console.log(text);
-      }
+      const width = this.contentWidth() - 4;
+      const wrapped = wrapAnsi(sanitizeForDisplay(step), width);
+      const marker = status === "completed" ? style.paint("ok", style.glyphs.check) : status === "in_progress" ? style.paint("accent", "▸") : style.dim("○");
+      wrapped.forEach((row, i) => {
+        const text = status === "completed" ? style.dim(style.strike(row)) : status === "in_progress" ? style.bold(row) : row;
+        rows.push(`  ${i === 0 ? marker : " "} ${text}`);
+      });
     }
-    console.log("");
+    this.emit("block", rows);
   }
 
   /** Boxed end-of-turn receipt. Lines starting with ⚠ or ✘ are highlighted. */
   receipt(lines: string[]): void {
-    if (lines.length === 0) {
-      return;
-    }
+    if (lines.length === 0) return;
+    const { style } = this;
+    const width = Math.min(this.contentWidth(), 100);
+    const rule = (text: string): string => style.dim(text);
+    const [tl, , bl] = style.glyphs.corner;
     const title = " receipt ";
-    const width = Math.min(process.stdout.columns ?? 80, 100);
-    const rule = (text: string): string => (this.rich ? rgb(COLOR_MUTED, text) : text);
-    console.log(rule(`  ╭─${title}${"─".repeat(Math.max(4, width - title.length - 6))}`));
+    const rows = [rule(`${tl}${style.glyphs.rule}${title}${style.glyphs.rule.repeat(Math.max(4, width - title.length - 3))}`)];
     for (const line of lines) {
-      const bad = line.startsWith("⚠") || line.startsWith("✘");
-      const body = this.rich ? (bad ? rgb(COLOR_PINK, line) : line.startsWith("✔") ? rgb([74, 222, 128], line) : dim(line)) : line;
-      console.log(`${rule("  │ ")}${body}`);
+      const clean = sanitizeForDisplay(line);
+      const body = clean.startsWith("⚠") || clean.startsWith("!") ? style.paint("warn", clean) : clean.startsWith("✘") ? style.paint("error", clean) : clean.startsWith("✔") ? style.paint("ok", clean) : style.dim(clean);
+      for (const row of wrapAnsi(body, width - 3)) rows.push(`${rule(style.glyphs.box.v)} ${row}`);
     }
-    console.log(rule(`  ╰${"─".repeat(Math.max(4, width - 6))}`));
-    console.log("");
+    rows.push(rule(`${bl}${style.glyphs.rule.repeat(Math.max(4, width - 1))}`));
+    this.emit("block", rows);
   }
 
-  /** Header for a permission prompt; the key is read by tui/approval.ts. */
-  approvalRequest(summary: string, reason: string): void {
-    console.log("");
-    console.log(this.rich ? rgb(COLOR_PINK, `  ⚠ ${reason}`) : `  ! ${reason}`);
-    console.log(this.rich ? `    ${rgb(COLOR_WHITE, summary)}` : `    ${summary}`);
-    process.stdout.write(
-      this.rich
-        ? `  ${dim("Allow?")} ${rgb(COLOR_CYAN, "[y]")}es · ${rgb(COLOR_CYAN, "[n]")}o · ${rgb(COLOR_CYAN, "[a]")}lways  `
-        : "  Allow? [y]es / [n]o / [a]lways ",
+  turnSummary(summary: TurnSummary): void {
+    const { style } = this;
+    if (summary.toolCalls === 0 && summary.durationMs < 5000) return;
+    const parts = [`Worked for ${formatDuration(summary.durationMs)}`];
+    if (summary.toolCalls > 0) parts.push(plural(summary.toolCalls, "tool call"));
+    const tokens = summary.inputTokens + summary.outputTokens;
+    if (tokens > 0) parts.push(`${formatTokens(summary.inputTokens)} in ${style.glyphs.dot} ${formatTokens(summary.outputTokens)} out`);
+    this.emit("meta", [style.dim(`${style.glyphs.bullet === "●" ? "✻" : "*"} ${parts.join(` ${style.glyphs.dot} `)}`)]);
+  }
+
+  // --- notices ------------------------------------------------------------------------------
+
+  /** Informational text (command output). Not styled beyond what the caller did. */
+  info(text: string): void {
+    this.emit("meta", sanitizeForDisplay(text).split("\n"));
+  }
+
+  dimInfo(text: string): void {
+    this.emit(
+      "meta",
+      sanitizeForDisplay(text)
+        .split("\n")
+        .map((line) => this.style.dim(line)),
     );
   }
 
-  approvalAnswered(answer: string): void {
-    console.log(this.rich ? dim(answer) : answer);
+  success(text: string): void {
+    this.emit("meta", [`${this.style.paint("ok", this.style.glyphs.check)} ${sanitizeForDisplay(text)}`]);
   }
 
-  assistant(text: string): void {
-    console.log(`\n${renderMarkdown(text, this.rich)}\n`);
-  }
-
-  info(text: string): void {
-    console.log(text);
+  warn(text: string): void {
+    this.emit("meta", [`${this.style.paint("warn", this.style.glyphs.warn)} ${sanitizeForDisplay(text)}`]);
   }
 
   error(text: string): void {
-    console.log(this.rich ? dim(text) : text);
+    this.emit("meta", [`${this.style.paint("error", this.style.glyphs.cross)} ${sanitizeForDisplay(text)}`]);
   }
 
-  goodbye(): void {
-    console.log(this.rich ? `\n${dim("Bye!")}` : "\nBye!");
+  /** A titled list, e.g. /help or /status. */
+  section(title: string, rows: string[]): void {
+    this.emit("block", [this.style.bold(this.style.paint("heading", title)), ...rows.map((r) => `  ${r}`)]);
   }
 
-  private formatContextLine(): string {
-    const provider = this.args.provider ?? "auto";
-    const line = `Using: ${provider} · ${this.args.model} · ${this.args.cwd}`;
-    return this.rich ? dim(line) : line;
+  /** Two-column key/value rows, aligned. */
+  keyValues(pairs: Array<[string, string]>): string[] {
+    const width = Math.max(...pairs.map(([k]) => k.length));
+    return pairs.map(([k, v]) => `${this.style.dim(k.padEnd(width))}  ${v}`);
   }
 
-  private formatSlashMenu(commands: SlashCommand[], width: number): string[] {
-    return commands.map(({ command, description }) => {
-      const commandText = this.rich ? rgb(COLOR_CYAN, command) : command;
-      const descriptionText = this.rich ? dim(description) : description;
-      const line = `  ${commandText}  ${descriptionText}`;
-      const padding = Math.max(0, width - stripVisibleLength(line));
-      return `${line}${" ".repeat(padding)}`;
-    });
+  /** Text for a modal title: wraps and indents consistently. */
+  modalRows(text: string): string[] {
+    return wrapAnsi(sanitizeForDisplay(text), Math.max(20, this.ui.columns - 6)).map((row) => `  ${row}`);
   }
 
-  private formatInputLine(
-    text: string,
-    cursor: number,
-    placeholder: string,
-    width: number,
-  ): { line: string; cursorColumn: number } {
-    const chevron = this.rich ? rgb(COLOR_PINK, CHEVRON) : CHEVRON;
-    const prefix = `${chevron} `;
-    const prefixVisible = 2;
-    const maxTextWidth = Math.max(10, width - prefixVisible - 1);
-
-    let displayText = text;
-    let displayCursor = cursor;
-
-    if (displayText.length > maxTextWidth) {
-      const start = Math.max(
-        0,
-        Math.min(displayCursor - maxTextWidth + 1, displayText.length - maxTextWidth),
-      );
-      displayText = displayText.slice(start, start + maxTextWidth);
-      displayCursor = cursor - start;
-    }
-
-    let content: string;
-    if (displayText.length === 0 && text.length === 0) {
-      content = this.rich ? dim(placeholder) : placeholder;
-    } else {
-      content = displayText;
-    }
-
-    const cursorColumn = prefixVisible + displayCursor + 1;
-    return { line: `${prefix}${content}`, cursorColumn };
-  }
-
-  private horizontalRule(width?: number): string {
-    const ruleWidth = width ?? this.frameWidth();
-    const rule = "─".repeat(Math.max(ruleWidth, 40));
-    return this.rich ? rgb(COLOR_CYAN, rule) : rule;
-  }
-
-  private frameWidth(): number {
-    const columns = process.stdout.columns ?? 80;
-    return Math.min(columns, Math.max(getBannerWidth() + 8, 40));
-  }
-
-  private getTotalInputAreaLines(): number {
-    return this.inputFrameLines + this.slashMenuLineCount + (this.hasStatusBar ? 1 : 0);
-  }
-
-  /** Move from the input content row to the line below the status bar before redraw/clear. */
-  private moveCursorBelowInputArea(): void {
-    const linesDown = this.hasStatusBar ? 3 : 2;
-    process.stdout.write(`\x1b[${linesDown}B`);
-  }
-
-  private positionInputCursor(): void {
-    if (!this.rich || !this.hasInputFrame) {
-      return;
-    }
-
-    const linesUp = 3;
-    process.stdout.write(`\x1b[${linesUp}A\x1b[${this.lastInputCursorColumn}G`);
-    showCursor();
+  truncateLine(text: string, max: number): string {
+    return truncate(sanitizeForDisplay(text).replace(/\s+/g, " "), max);
   }
 }
 
-function summarizeToolResult(name: string, result: unknown): string {
-  if (!result || typeof result !== "object") {
-    return "";
-  }
-  const record = result as Record<string, unknown>;
-
-  if (record.error) {
-    return `error: ${truncateInline(String(record.error), 200)}`;
-  }
-
-  if (name === "shell") {
-    if (record.background && typeof record.background === "object") {
-      const bg = record.background as { pid?: number | null };
-      return `started in background (pid ${bg.pid ?? "?"})`;
-    }
-    const parts: string[] = [`exit ${record.exitCode ?? "?"}`];
-    if (record.timedOut) parts.push("timed out");
-    if (record.sessionReset) parts.push("session reset");
-    return parts.join(", ");
-  }
-
-  return "";
-}
-
-function truncateInline(text: string, max: number): string {
-  const single = text.replace(/\s+/g, " ").trim();
-  return single.length > max ? `${single.slice(0, max)}…` : single;
-}
-
-function shortenPath(cwd: string): string {
+export function shortenHome(cwd: string): string {
   const home = process.env.HOME;
-  if (home && cwd.startsWith(home)) {
-    return `~${cwd.slice(home.length)}`;
-  }
-
-  return cwd;
+  return home && (cwd === home || cwd.startsWith(`${home}/`)) ? `~${cwd.slice(home.length)}` : cwd;
 }
 
-function stripVisibleLength(text: string): number {
-  let length = 0;
-  let index = 0;
-
-  while (index < text.length) {
-    if (text[index] === "\u001b") {
-      const end = text.indexOf("m", index);
-      index = end === -1 ? text.length : end + 1;
-      continue;
+/** Current git branch (or short SHA when detached) without spawning git. */
+export function readGitBranch(cwd: string): string | undefined {
+  try {
+    let dir = path.resolve(cwd);
+    for (let i = 0; i < 40; i += 1) {
+      const gitPath = path.join(dir, ".git");
+      if (existsSync(gitPath)) {
+        let gitDir = gitPath;
+        if (statSync(gitPath).isFile()) {
+          const pointer = /^gitdir:\s*(.+)$/m.exec(readFileSync(gitPath, "utf8"));
+          if (!pointer) return undefined;
+          gitDir = path.resolve(dir, pointer[1].trim());
+        }
+        const head = readFileSync(path.join(gitDir, "HEAD"), "utf8").trim();
+        const ref = /^ref:\s*refs\/heads\/(.+)$/.exec(head);
+        return ref ? ref[1] : head.slice(0, 7) || undefined;
+      }
+      const parent = path.dirname(dir);
+      if (parent === dir) return undefined;
+      dir = parent;
     }
-
-    length += 1;
-    index += 1;
+  } catch {
+    return undefined;
   }
-
-  return length;
-}
-
-function hideCursor(): void {
-  process.stdout.write("\x1b[?25l");
-}
-
-function showCursor(): void {
-  process.stdout.write("\x1b[?25h");
-}
-
-function readlineMoveUp(lines: number): void {
-  if (lines <= 0) {
-    return;
-  }
-
-  process.stdout.write(`\x1b[${lines}A`);
-}
-
-function clearLines(lines: number): void {
-  for (let index = 0; index < lines; index += 1) {
-    process.stdout.write("\x1b[2K\r");
-    if (index < lines - 1) {
-      process.stdout.write("\x1b[1B");
-    }
-  }
-
-  readlineMoveUp(lines - 1);
+  return undefined;
 }

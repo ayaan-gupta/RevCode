@@ -73,6 +73,8 @@ export interface CliArgs {
   /** Load AGENTS.md / CLAUDE.md project instructions (default true). */
   instructions?: boolean;
   verbose?: boolean;
+  /** "auto" | "dark" | "light" — terminal color theme. */
+  theme?: string;
   /** Flag keys set explicitly on the command line. */
   explicit?: string[];
 }
@@ -101,6 +103,7 @@ export type Command =
   | { kind: "universes"; args: CliArgs; action: string; rest: string[] }
   | { kind: "sessions"; args: CliArgs }
   | { kind: "profile"; args: CliArgs; action: string }
+  | { kind: "setup"; args: CliArgs }
   | { kind: "help" }
   | { kind: "version" };
 
@@ -136,6 +139,7 @@ const FLAGS: Record<string, FlagSpec> = {
   "--hooks": { key: "hooks", kind: "boolean" },
   "--instructions": { key: "instructions", kind: "boolean" },
   "--verbose": { key: "verbose", kind: "boolean" },
+  "--theme": { key: "theme", kind: "string" },
 };
 
 const SHORT_ALIASES = new Map<string, string>();
@@ -200,6 +204,11 @@ export function parseCommandLine(argv: string[]): Command {
     case "sessions": {
       const { args } = parseFlags(rest, {});
       return { kind: "sessions", args };
+    }
+    case "setup":
+    case "login": {
+      const { args } = parseFlags(rest, {});
+      return { kind: "setup", args };
     }
     case "profile": {
       const action = rest[0] && !rest[0].startsWith("-") ? rest[0] : "show";
@@ -314,12 +323,19 @@ function parseFlags(
   if (args.permissionMode !== undefined && !PERMISSION_MODES.includes(args.permissionMode)) {
     throw new Error(`Unknown mode: ${args.permissionMode}. Expected one of: ${PERMISSION_MODES.join(", ")}.`);
   }
+  if (args.theme !== undefined && !["auto", "dark", "light"].includes(args.theme)) {
+    throw new Error(`Unknown theme: ${args.theme}. Expected auto, dark, or light.`);
+  }
   if (args.outputFormat !== undefined && !["text", "json", "stream-json"].includes(args.outputFormat)) {
     throw new Error(`Unknown output format: ${args.outputFormat}. Expected text, json, or stream-json.`);
   }
   if (args.continueLast) {
     args.resume = args.resume ?? "";
     explicit.add("resume");
+  }
+  // `-p "task"` / `--prompt-file f` mean "run this and exit", as in other agent CLIs.
+  if ((args.prompt !== undefined || args.promptFile !== undefined) && !explicit.has("headless")) {
+    args.headless = true;
   }
   args.explicit = [...explicit];
   return { args, positional, tune: tune as Partial<TuneOptions> };
@@ -415,6 +431,7 @@ export function resolveArgs(args: CliArgs, loaded: LoadedConfig, env: NodeJS.Pro
   if (!explicit.has("mcp")) out.mcp = config.mcp ?? true;
   if (!explicit.has("hooks")) out.hooks = config.hooks ?? true;
   if (!explicit.has("instructions")) out.instructions = true;
+  if (!explicit.has("theme") && config.theme) out.theme = config.theme;
   out.outputFormat = out.outputFormat ?? "text";
   return out;
 }
@@ -428,6 +445,7 @@ Usage:
   revcode universes <action>      list | show | diff | land | discard | share | replay | compare | purge
   revcode sessions                list saved sessions
   revcode profile <show|reset>    inspect or clear the tuned profile for --model
+  revcode setup                   choose a provider and save your API key
 
 Common flags:
   -m, --model <name>        model id (default ${DEFAULT_MODEL})
@@ -448,6 +466,8 @@ Common flags:
       --time-budget <sec>   wall-clock budget (nudges the model, stops cleanly near the limit)
       --max-iterations <n>  tool-loop limit per turn
       --trajectory-out <f>  write a JSONL trajectory
+      --theme <t>           auto | dark | light   terminal colors (default auto)
+      --verbose             show longer tool output
       --no-snapshot --no-mcp --no-hooks --no-instructions   disable the startup environment snapshot / MCP servers / hooks / AGENTS.md
 
 Environment: Z_AI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, OLLAMA_HOST,
