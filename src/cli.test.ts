@@ -81,3 +81,30 @@ describe("resolveArgs", () => {
     expect(withProvider("ollama", "qwen2.5-coder").model).toBe("qwen2.5-coder");
   });
 });
+
+describe("terminal and prompt options", () => {
+  it("parses --theme and --vim, and validates the theme", () => {
+    expect(parseArgs(["--theme", "light", "--vim"])).toMatchObject({ theme: "light", vim: true });
+    expect(() => parseArgs(["--theme", "neon"])).toThrow("Unknown theme");
+    expect(parseArgs(["--no-vim"]).vim).toBe(false);
+  });
+
+  it("takes theme and vim from config unless the command line says otherwise", () => {
+    const loaded: LoadedConfig = { config: { theme: "light", vim: true }, warnings: [], files: [] };
+    expect(resolveArgs(parseArgs([]), loaded, {})).toMatchObject({ theme: "light", vim: true });
+    expect(resolveArgs(parseArgs(["--theme", "dark", "--no-vim"]), loaded, {})).toMatchObject({ theme: "dark", vim: false });
+  });
+
+  it("treats a prompt as a request to run headlessly, unless --headless was spelled out", () => {
+    expect(parseArgs(["-p", "do it"]).headless).toBe(true);
+    expect(parseArgs(["--prompt-file", "task.txt"]).headless).toBe(true);
+    expect(parseArgs([]).headless).toBe(false);
+    expect(parseArgs(["-p", "x", "--no-headless"]).headless).toBe(false);
+  });
+
+  it("parses the setup and completion subcommands", () => {
+    expect(parseCommandLine(["setup"]).kind).toBe("setup");
+    expect(parseCommandLine(["login"]).kind).toBe("setup");
+    expect(parseCommandLine(["completion", "zsh"])).toMatchObject({ kind: "completion", shell: "zsh" });
+  });
+});

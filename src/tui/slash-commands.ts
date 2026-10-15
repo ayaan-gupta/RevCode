@@ -34,6 +34,7 @@ export function builtinSlashCommands(sources: SlashCommandSources): SlashCommand
     { command: "/copy", description: "Copy the last response to the clipboard" },
     { command: "/export", description: "Save the conversation as Markdown", args: "[file]" },
     { command: "/verbose", description: "Toggle detailed tool output (Ctrl+O)" },
+    { command: "/vim", description: "Toggle Vim-style editing in the prompt" },
     { command: "/theme", description: "Switch between dark and light colors", args: "[auto|dark|light]", values: () => ["auto", "dark", "light"] },
     { command: "/permissions", description: "Show or add permission rules", args: "[allow|deny <rule>]", values: () => ["allow", "deny"] },
     { command: "/mcp", description: "Show MCP servers and their tools" },

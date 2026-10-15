@@ -67,6 +67,8 @@ export interface EngineObserver {
   llmStart?(): void;
   /** Streamed assistant text (only when `stream` is on). */
   textDelta?(text: string): void;
+  /** Streamed reasoning ("thinking") text, when the model exposes it (only when `stream` is on). */
+  reasoningDelta?(text: string): void;
   llmEnd?(info: { content: string; streamed: boolean }): void;
   toolCall?(call: LlmToolCall): void;
   toolResult?(call: LlmToolCall, result: unknown): void;
@@ -285,10 +287,13 @@ export class AgentEngine {
         // header timeout and get restarted from scratch. `this.stream` only controls whether
         // text is forwarded to the observer.
         let streamed = false;
-        const onDelta = (delta: { text?: string }): void => {
+        const onDelta = (delta: { text?: string; reasoning?: string }): void => {
           if (this.stream && delta.text) {
             streamed = true;
             this.observer.textDelta?.(delta.text);
+          }
+          if (this.stream && delta.reasoning) {
+            this.observer.reasoningDelta?.(delta.reasoning);
           }
         };
 

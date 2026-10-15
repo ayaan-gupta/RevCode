@@ -12,6 +12,8 @@ export interface DiffViewOptions {
   width: number;
   /** Maximum rows to return; the rest is summarized in one line. */
   maxRows: number;
+  /** Name the file above its hunks even for a single-file diff (tool cards already show it). */
+  showFileNames?: boolean;
 }
 
 export interface DiffView {
@@ -63,6 +65,8 @@ export function parseUnifiedDiff(diff: string): { rows: Row[]; added: number; re
       continue;
     }
     if (!inHunk) {
+      // git's per-file preamble is noise next to the file name and the hunks
+      if (/^(diff --git|index |new file mode|deleted file mode|old mode|new mode|similarity index|--- |\+\+\+ )/.test(line)) continue;
       if (line.trim().length > 0) rows.push({ kind: "note", text: line });
       continue;
     }
@@ -115,7 +119,7 @@ export function renderDiffView(diff: string, options: DiffViewOptions): DiffView
 
   for (const row of parsed.rows) {
     if (row.kind === "file") {
-      if (parsed.files > 1) out.push(style.bold(row.text));
+      if (parsed.files > 1 || options.showFileNames) out.push(style.bold(row.text));
       continue;
     }
     if (row.kind === "sep") {

@@ -39,6 +39,16 @@ const MAX_LIVE_BUFFER = 5_000_000;
 /** Window kept at the tail when the live buffer is collapsed (must hold the sentinel). */
 const LIVE_TAIL_WINDOW = 65_536;
 
+let outputListener: ((text: string) => void) | undefined;
+
+/**
+ * Observe raw command output as it arrives (the interactive UI shows the latest line under
+ * "Running …"). Chunks that carry the completion sentinel are filtered out.
+ */
+export function setShellOutputListener(listener: ((text: string) => void) | undefined): void {
+  outputListener = listener;
+}
+
 export interface ShellRunOptions {
   timeoutMs?: number;
   /** Launch detached, redirected to a log file, and return immediately. */
@@ -316,7 +326,9 @@ export class ShellSession {
     this.outBuf = "";
 
     const onData = (chunk: Buffer) => {
-      this.outBuf += chunk.toString("utf8");
+      const text = chunk.toString("utf8");
+      if (outputListener && !text.includes("__REVCODE_DONE_")) outputListener(text);
+      this.outBuf += text;
       if (this.outBuf.length > MAX_LIVE_BUFFER) {
         // Collapse the middle but always keep the tail (holds the sentinel).
         const head = this.outBuf.slice(0, HEAD_CHARS);

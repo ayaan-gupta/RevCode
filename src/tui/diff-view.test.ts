@@ -69,3 +69,38 @@ describe("renderDiffView", () => {
     expect(rows).toContain("two.ts");
   });
 });
+
+describe("git diffs", () => {
+  const gitDiff = [
+    "diff --git a/src/a.ts b/src/a.ts",
+    "index 1111111..2222222 100644",
+    "--- a/src/a.ts",
+    "+++ b/src/a.ts",
+    "@@ -1,2 +1,2 @@",
+    " keep",
+    "-old",
+    "+new",
+    "diff --git a/b.txt b/b.txt",
+    "new file mode 100644",
+    "index 0000000..3333333",
+    "--- /dev/null",
+    "+++ b/b.txt",
+    "@@ -0,0 +1 @@",
+    "+fresh",
+  ].join("\n");
+
+  it("drops git's preamble, names each file, and follows several files in one diff", () => {
+    const rows = renderDiffView(gitDiff, { style: plainStyle(), width: 60, maxRows: 50 }).rows;
+    expect(rows).toContain("src/a.ts");
+    expect(rows).toContain("b.txt");
+    expect(rows.some((r) => r.includes("diff --git") || r.includes("index "))).toBe(false);
+    expect(rows.some((r) => /2 - old/.test(r))).toBe(true);
+    expect(rows.some((r) => /1 \+ fresh/.test(r))).toBe(true);
+  });
+
+  it("names a single file only when asked", () => {
+    const one = gitDiff.split("diff --git a/b.txt")[0];
+    expect(renderDiffView(one, { style: plainStyle(), width: 60, maxRows: 50 }).rows).not.toContain("src/a.ts");
+    expect(renderDiffView(one, { style: plainStyle(), width: 60, maxRows: 50, showFileNames: true }).rows).toContain("src/a.ts");
+  });
+});

@@ -59,6 +59,8 @@ export interface FrameModel {
   rows: number;
   tail?: string;
   activity?: ActivityModel;
+  /** One dim line under the activity line (model reasoning, or a command's latest output). */
+  detail?: string;
   queue: string[];
   editor: LineEditor;
   placeholder: string;
@@ -67,6 +69,8 @@ export interface FrameModel {
   modal?: ModalModel;
   /** Draw only the modal (nothing while no modal is open). */
   minimal?: boolean;
+  /** Vim mode indicator, when Vim editing is on. */
+  vim?: "INSERT" | "NORMAL";
 }
 
 const MODE_ROLE: Record<string, Role | undefined> = {
@@ -100,6 +104,9 @@ export function buildFrame(model: FrameModel, style: Style): Frame {
   if (model.activity) {
     lines.push("");
     lines.push(activityLine(model.activity, style, cols));
+    if (model.detail && model.activity.mode === "spin" && !compact) {
+      lines.push(style.dim(`  ${style.glyphs.quote} ${truncate(model.detail, Math.max(10, cols - 6))}`));
+    }
   }
 
   let cursor: Frame["cursor"];
@@ -138,8 +145,12 @@ export function buildFrame(model: FrameModel, style: Style): Frame {
 function activityLine(activity: ActivityModel, style: Style, cols: number): string {
   const marker =
     activity.mode === "spin" ? style.paint("accent", style.glyphs.spinner[activity.frame % style.glyphs.spinner.length]) : style.paint("warn", "?");
+  const width = Math.max(10, cols - 1);
+  // The label gives way before the timer and the interrupt hint do.
+  const metaWidth = activity.meta ? visibleWidth(activity.meta) + 2 : 0;
+  const label = truncate(activity.label, Math.max(12, width - 2 - metaWidth));
   const meta = activity.meta ? `  ${activity.stalled ? style.paint("warn", activity.meta) : style.dim(activity.meta)}` : "";
-  return truncate(`${marker} ${activity.label}${meta}`, Math.max(10, cols - 1));
+  return truncate(`${marker} ${label}${meta}`, width);
 }
 
 // --- input box --------------------------------------------------------------------------
@@ -250,7 +261,7 @@ function statusLine(model: FrameModel, style: Style): string {
     left = style.paint("warn", model.hint);
   } else {
     const label = MODE_LABEL[status.mode] ?? status.mode;
-    left = paint(label);
+    left = model.vim ? `${style.bold(model.vim === "NORMAL" ? style.paint("warn", "-- NORMAL --") : style.paint("ok", "-- INSERT --"))}  ${paint(label)}` : paint(label);
     if (status.mode === "ask" && width >= 100) left += style.dim("  (shift+tab to change)");
     for (const extra of status.extra) left += `  ${extra}`;
   }

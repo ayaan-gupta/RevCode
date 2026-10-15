@@ -162,3 +162,21 @@ describe("readGitBranch", () => {
     expect(readGitBranch(mkdtempSync(path.join(os.tmpdir(), "revcode-nogit-")))).toBeUndefined();
   });
 });
+
+describe("TerminalRenderer: live signals", () => {
+  it("shows the latest reasoning sentence as a hint and clears it when text starts", () => {
+    const { ui, r } = make();
+    r.reasoningDelta("First I should read the file. Then I need to check whether the loop");
+    expect(ui.thought).toBe("Then I need to check whether the loop");
+    r.streamDelta("Here is the answer");
+    expect(ui.thought).toBeUndefined();
+  });
+
+  it("shows the newest non-empty line of command output", () => {
+    const { ui, r } = make();
+    r.toolOutputChunk("compiling a\ncompiling b\n\n");
+    expect(ui.toolOutput).toBe("compiling b");
+    r.toolOutputChunk("\u001b[32mdone\u001b[0m\n");
+    expect(ui.toolOutput).toBe("done");
+  });
+});

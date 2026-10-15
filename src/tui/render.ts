@@ -66,6 +66,7 @@ export class TerminalRenderer {
   private model: string;
   private lastAssistantText = "";
   private streamText = "";
+  private reasoning = "";
 
   constructor(
     private readonly cwd: string,
@@ -216,6 +217,7 @@ export class TerminalRenderer {
 
   /** Streamed assistant text. */
   streamDelta(delta: string): void {
+    if (this.reasoning) this.clearThought();
     if (!this.md) {
       this.md = new MarkdownStream({ style: this.style, width: this.contentWidth() });
       this.streamText = "";
@@ -228,6 +230,26 @@ export class TerminalRenderer {
     const { lines, tail } = this.md.push(delta);
     if (lines.length > 0) this.ui.print(this.indent(lines));
     this.ui.setTail(tail.length > 0 ? this.indent(tail.split("\n")) : undefined);
+  }
+
+  /** Streamed reasoning: keep the latest fragment as a one-line "what it is thinking" hint. */
+  reasoningDelta(delta: string): void {
+    this.ui.addTokens(delta.length / 4);
+    this.reasoning = `${this.reasoning}${delta}`.slice(-600);
+    const lastSentence = this.reasoning.replace(/\s+/g, " ").trim().split(/(?<=[.!?:])\s+/).at(-1) ?? "";
+    this.ui.setThought(sanitizeForDisplay(lastSentence).slice(-140));
+  }
+
+  /** Command output arriving: show the newest non-empty line. */
+  toolOutputChunk(chunk: string): void {
+    const lines = sanitizeForDisplay(chunk).split("\n").map((l) => l.trim()).filter(Boolean);
+    const last = lines.at(-1);
+    if (last) this.ui.setToolOutput(last);
+  }
+
+  clearThought(): void {
+    this.reasoning = "";
+    this.ui.setThought(undefined);
   }
 
   streamEnd(): void {

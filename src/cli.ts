@@ -75,6 +75,8 @@ export interface CliArgs {
   verbose?: boolean;
   /** "auto" | "dark" | "light" — terminal color theme. */
   theme?: string;
+  /** Vim-style editing in the prompt. */
+  vim?: boolean;
   /** Flag keys set explicitly on the command line. */
   explicit?: string[];
 }
@@ -141,6 +143,7 @@ const FLAGS: Record<string, FlagSpec> = {
   "--instructions": { key: "instructions", kind: "boolean" },
   "--verbose": { key: "verbose", kind: "boolean" },
   "--theme": { key: "theme", kind: "string" },
+  "--vim": { key: "vim", kind: "boolean" },
 };
 
 const SHORT_ALIASES = new Map<string, string>();
@@ -447,6 +450,7 @@ export function resolveArgs(args: CliArgs, loaded: LoadedConfig, env: NodeJS.Pro
   if (!explicit.has("hooks")) out.hooks = config.hooks ?? true;
   if (!explicit.has("instructions")) out.instructions = true;
   if (!explicit.has("theme") && config.theme) out.theme = config.theme;
+  if (!explicit.has("vim") && config.vim !== undefined) out.vim = config.vim;
   out.outputFormat = out.outputFormat ?? "text";
   return out;
 }
@@ -484,6 +488,7 @@ Common flags:
       --trajectory-out <f>  write a JSONL trajectory
       --theme <t>           auto | dark | light   terminal colors (default auto)
       --verbose             show longer tool output
+      --vim                 Vim-style editing in the prompt (toggle later with /vim)
       --no-snapshot --no-mcp --no-hooks --no-instructions   disable the startup environment snapshot / MCP servers / hooks / AGENTS.md
 
 Environment: Z_AI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, OLLAMA_HOST,

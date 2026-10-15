@@ -55,6 +55,14 @@ export class FakeUi implements Ui {
     this.hints.push(text);
   }
   setNote(): void {}
+  thought: string | undefined;
+  toolOutput: string | undefined;
+  setThought(text: string | undefined): void {
+    this.thought = text;
+  }
+  setToolOutput(text: string | undefined): void {
+    this.toolOutput = text;
+  }
   beginTool(id: string, label: string): void {
     this.tools.push(`${id}:${label}`);
   }

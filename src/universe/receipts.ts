@@ -211,7 +211,7 @@ export function formatReceipt(receipt: Receipt): string[] {
   const fileSummary =
     receipt.files.length === 0
       ? "no files changed"
-      : `${receipt.files.length} file${receipt.files.length === 1 ? "" : "s"} changed (+${add} −${del})`;
+      : `${receipt.files.length} file${receipt.files.length === 1 ? "" : "s"} changed${add + del > 0 ? ` (+${add} −${del})` : ""}`;
   const seconds = (receipt.durationMs / 1000).toFixed(1);
   lines.push(`${fileSummary} · ${receipt.commands.length} command${receipt.commands.length === 1 ? "" : "s"} · ${receipt.toolCalls} tool calls · ${seconds}s`);
 

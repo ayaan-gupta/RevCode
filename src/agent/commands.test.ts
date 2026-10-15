@@ -53,6 +53,7 @@ beforeEach(async () => {
     runPrompt: spies.runPrompt,
     adoptSession: spies.adoptSession,
     refreshStatus: spies.refreshStatus,
+    toggleVim: () => true,
   };
 });
 
@@ -166,6 +167,12 @@ describe("built-in slash commands", () => {
     expect(style.theme).toBe("dark");
     await runCommand(ctx, "/theme", "neon");
     expect(ui.text()).toContain('Expected "auto", "dark" or "light"');
+  });
+
+  it("/vim toggles Vim editing and remembers the choice", async () => {
+    await runCommand(ctx, "/vim", "");
+    expect(ui.text()).toContain("Vim mode on");
+    expect(JSON.parse(readFileSync(path.join(process.env.REVCODE_HOME as string, "config.json"), "utf8"))).toMatchObject({ vim: true });
   });
 
   it("/verbose toggles detailed output", async () => {

@@ -33,6 +33,8 @@ export interface RevcodeConfig {
   hooks?: boolean;
   /** Terminal colors: "auto" detects the background, or force "dark" / "light". */
   theme?: "auto" | "dark" | "light";
+  /** Vim-style editing in the prompt. */
+  vim?: boolean;
 }
 
 export interface LoadedConfig {
@@ -119,6 +121,7 @@ export function validateConfig(raw: unknown): { config: RevcodeConfig; problems:
   bool("snapshot");
   bool("mcp");
   bool("hooks");
+  bool("vim");
 
   if (input.permissions !== undefined) {
     const perms = input.permissions as Record<string, unknown> | null;

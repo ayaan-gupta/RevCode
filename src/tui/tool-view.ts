@@ -110,10 +110,29 @@ export function describeCall(call: Call, max = 100): { title: string; detail: st
   return { title, detail: truncate(detail, max) };
 }
 
-/** Short label for the "Running …" activity line. */
+/** Present-tense description for the activity line: "Running npm test", "Reading src/a.ts". */
 export function activityLabel(call: Call): string {
   const { title, detail } = describeCall(call, 60);
-  return detail ? `${title.toLowerCase()}: ${detail}` : title.toLowerCase();
+  const verbs: Record<string, string> = {
+    shell: "Running",
+    read_file: "Reading",
+    write_file: "Writing",
+    edit_file: "Editing",
+    edit_anchored: "Editing",
+    apply_patch: "Editing",
+    delete_file: "Deleting",
+    list_directory: "Listing",
+    grep: "Searching",
+    glob: "Finding",
+    task: "Delegating:",
+    use_skill: "Loading skill",
+    view_image: "Looking at",
+    terminal: "Driving terminal:",
+    update_plan: "Updating the plan",
+  };
+  const verb = verbs[call.name];
+  if (verb) return detail ? `${verb} ${detail}` : verb;
+  return detail ? `Calling ${title}: ${detail}` : `Calling ${title}`;
 }
 
 type Outcome = "ok" | "error" | "denied";

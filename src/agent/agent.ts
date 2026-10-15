@@ -8,6 +8,7 @@
  */
 
 import { stdin as input } from "node:process";
+import { execFile } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { CliArgs } from "../cli.js";
@@ -15,6 +16,7 @@ import { loadConfig } from "../config/config.js";
 import { loadInstructions } from "../config/instructions.js";
 import { resolveProvider, type LlmToolCall } from "../llm/client.js";
 import { setRetryListener } from "../llm/retry.js";
+import { setShellOutputListener } from "../tools/shell-session.js";
 import { DEFAULT_PROFILE } from "../harness/profile.js";
 import { buildSystemPrompt as buildPrompt } from "../harness/prompt.js";
 import { expandCommand, findCommand, parseSlashInput } from "../skills/index.js";
@@ -83,6 +85,7 @@ export class Agent {
   private readonly ui: Ui;
   private readonly renderer: TerminalRenderer;
   private readonly files: FileIndex | undefined;
+  private readonly editor: LineEditor | undefined;
   private turnAbort?: AbortController;
   private lastSigint = 0;
   private lastReceipt?: Receipt;
@@ -112,6 +115,8 @@ export class Agent {
         completer: createCompleter({ commands: () => this.slashCommands(), files: this.files }),
         transformPaste: (text) => pastedPathToMention(text, this.args.cwd),
       });
+      editor.setVim(args.vim === true);
+      this.editor = editor;
       this.ui = new TerminalUI({
         stdin: process.stdin,
         stdout: process.stdout,
@@ -138,6 +143,7 @@ export class Agent {
     }
     this.renderer = new TerminalRenderer(args.cwd, args.model, this.ui, this.style, { verbose: args.verbose });
     if (this.interactive) {
+      setShellOutputListener((chunk) => this.renderer.toolOutputChunk(chunk));
       setRetryListener((notice) =>
         this.ui.setNote(`${notice.reason} ${this.style.glyphs.dot} retrying in ${formatDuration(notice.delayMs)} (attempt ${notice.attempt + 1}/${notice.maxAttempts})`, notice.delayMs + 2000),
       );
@@ -157,6 +163,7 @@ export class Agent {
     }
     this.disposed = true;
     setRetryListener(undefined);
+    setShellOutputListener(undefined);
     this.ui.unmount();
     void this.runtime?.dispose();
   }
@@ -387,7 +394,9 @@ export class Agent {
     const started = new Map<string, { at: number; modal: number }>();
     return {
       textDelta: (text) => this.renderer.streamDelta(text),
+      reasoningDelta: (text) => this.renderer.reasoningDelta(text),
       llmEnd: ({ content, streamed }) => {
+        this.renderer.clearThought();
         if (this.renderer.isStreaming()) {
           this.renderer.streamEnd();
         } else if (content && !streamed) {
@@ -396,6 +405,7 @@ export class Agent {
       },
       toolCall: (call) => {
         this.renderer.streamEnd();
+        this.renderer.clearThought();
         started.set(call.id, { at: Date.now(), modal: this.ui.modalMs() });
         this.ui.beginTool(call.id, activityLabel(call));
       },
@@ -458,6 +468,9 @@ export class Agent {
     if (runtime.skills.length > 0) parts.push(plural(runtime.skills.length, "skill"));
     if (runtime.profileSource !== "default") parts.push(`${runtime.profileSource} profile`);
     if (parts.length > 0) this.renderer.dimInfo(`Loaded: ${parts.join(" · ")}`);
+    if (instructions.length === 0 && !this.resumed && listSessions({ cwd: this.args.cwd }).length === 0) {
+      this.renderer.dimInfo("New here? /init writes an AGENTS.md so RevCode knows this project's build and test commands.");
+    }
     if (runtime.universe) {
       this.renderer.info(`${this.style.paint("accent", "Universe")} ${runtime.universe.id} — changes stay isolated until you /land them.`);
     }
@@ -674,6 +687,12 @@ export class Agent {
       runPrompt: (prompt, display) => this.interactiveTurn(prompt, display),
       adoptSession: (snapshot) => this.adoptSession(rt, snapshot),
       refreshStatus: () => this.refreshStatus(),
+      toggleVim: () => {
+        if (!this.editor) return false;
+        this.editor.setVim(!this.editor.isVim());
+        this.ui.refresh();
+        return this.editor.isVim();
+      },
     };
   }
 
@@ -729,6 +748,31 @@ export class Agent {
     return true;
   }
 
+  /** `/diff` outside a universe: what has changed in the working tree, as a readable diff. */
+  private async showGitDiff(arg: string): Promise<void> {
+    const run = (args: string[]): Promise<string | undefined> =>
+      new Promise((resolve) => {
+        execFile("git", args, { cwd: this.args.cwd, maxBuffer: 16 * 1024 * 1024, timeout: 15_000 }, (error, stdout) => resolve(error ? undefined : String(stdout)));
+      });
+    const stat = await run(["diff", "HEAD", "--stat", "--no-color"]);
+    if (stat === undefined) {
+      this.renderer.dimInfo("No git repository here, so there is nothing to diff. Parallel Universes (revcode --universe) track changes anywhere.");
+      return;
+    }
+    if (stat.trim() === "") {
+      this.renderer.dimInfo("No uncommitted changes.");
+      return;
+    }
+    this.renderer.info(stat.trimEnd());
+    if (arg === "full" || arg.startsWith("-")) {
+      const diff = (await run(["diff", "HEAD", "--no-color", "--unified=3"])) ?? "";
+      const view = renderDiffView(diff, { style: this.style, width: this.renderer.contentWidth(), maxRows: 400, showFileNames: true });
+      this.renderer.info(view.rows.join("\n"));
+    } else {
+      this.renderer.dimInfo("(/diff full for the complete diff)");
+    }
+  }
+
   // --- universe commands --------------------------------------------------------
 
   private async handleUniverseCommand(rt: Runtime, name: string, arg: string): Promise<void> {
@@ -738,6 +782,10 @@ export class Agent {
       return;
     }
     if (!universe) {
+      if (name === "/diff") {
+        await this.showGitDiff(arg);
+        return;
+      }
       this.renderer.info("This session is not in a Parallel Universe. Start one with: revcode --universe");
       return;
     }

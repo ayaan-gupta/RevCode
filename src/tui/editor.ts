@@ -10,6 +10,7 @@
 import type { Completer, CompletionItem, CompletionResult } from "./completion.js";
 import type { KeyEvent } from "./keys.js";
 import { indexAtColumn, layoutRows, locate } from "./layout.js";
+import { findChar, firstNonBlank, lineEndOf, lineStartOf, wordBackward, wordEnd, wordForward } from "./vim-motions.js";
 import { graphemes } from "./width.js";
 
 export type EditorResult =
@@ -95,6 +96,14 @@ export class LineEditor {
 
   private unitCache: { text: string; units: Unit[] } | undefined;
 
+  private vimEnabled = false;
+  private vimInsert = true;
+  private vimCount = "";
+  private vimOp: "d" | "c" | "y" | undefined;
+  private vimArg: "f" | "F" | "t" | "T" | "r" | "g" | undefined;
+  private vimRegister: { text: string; linewise: boolean } = { text: "", linewise: false };
+  private vimLastFind: { kind: "f" | "F" | "t" | "T"; char: string } | undefined;
+
   constructor(options: EditorOptions = {}) {
     this.history = [...(options.history ?? [])];
     this.completer = options.completer;
@@ -168,6 +177,30 @@ export class LineEditor {
     return this.search !== undefined;
   }
 
+  // --- vim mode ----------------------------------------------------------------------
+
+  setVim(enabled: boolean): void {
+    this.vimEnabled = enabled;
+    this.vimInsert = true;
+    this.resetVimPending();
+  }
+
+  isVim(): boolean {
+    return this.vimEnabled;
+  }
+
+  /** "INSERT" / "NORMAL" while Vim mode is on. */
+  vimModeName(): "INSERT" | "NORMAL" | undefined {
+    return this.vimEnabled ? (this.vimInsert ? "INSERT" : "NORMAL") : undefined;
+  }
+
+  /** True when Escape belongs to the editor (menu, search, or leaving Vim insert mode). */
+  consumesEscape(busy = false): boolean {
+    if (this.menu !== undefined || this.search !== undefined) return true;
+    // While a task runs, Esc with nothing typed still means "interrupt".
+    return this.vimEnabled && this.vimInsert && (!busy || this.text.length > 0);
+  }
+
   // --- view --------------------------------------------------------------------------
 
   view(width: number, maxRows: number): EditorView {
@@ -196,6 +229,11 @@ export class LineEditor {
 
   handle(ev: KeyEvent): EditorResult {
     if (this.search) return this.handleSearchKey(ev);
+
+    if (this.vimEnabled && !this.vimInsert) {
+      const handled = this.handleVimNormal(ev);
+      if (handled) return handled;
+    }
 
     if (ev.name === "paste") {
       this.insertPaste(ev.text ?? "");
@@ -262,6 +300,10 @@ export class LineEditor {
         if (this.menu) {
           this.menuDismissedFor = this.text;
           this.menu = undefined;
+          return { type: "handled" };
+        }
+        if (this.vimEnabled && this.vimInsert) {
+          this.enterVimNormal();
           return { type: "handled" };
         }
         return { type: "unhandled" };
@@ -786,6 +828,445 @@ export class LineEditor {
     this.afterChange();
     if (ev.name === "return" && !ev.shift && !ev.alt) return { type: "handled" };
     return this.handle(ev);
+  }
+
+  // --- vim normal mode ------------------------------------------------------------------
+
+  private resetVimPending(): void {
+    this.vimCount = "";
+    this.vimOp = undefined;
+    this.vimArg = undefined;
+  }
+
+  private enterVimNormal(): void {
+    this.vimInsert = false;
+    this.resetVimPending();
+    // Leaving insert mode steps back onto the last typed character, as in Vim.
+    if (this.cursor > this.lineStart(this.cursor)) this.cursor = this.prev(this.cursor);
+    this.lastEdit = "";
+    this.refreshMenu();
+  }
+
+  private enterVimInsert(): void {
+    this.vimInsert = true;
+    this.resetVimPending();
+    this.menuSuspended = false;
+    this.refreshMenu();
+  }
+
+  /** In normal mode the cursor rests on a character, never past the end of a line. */
+  private clampNormal(): void {
+    const end = this.lineEnd(this.cursor);
+    if (this.cursor >= end && end > this.lineStart(this.cursor)) this.cursor = this.prev(end);
+  }
+
+  private handleVimNormal(ev: KeyEvent): EditorResult | undefined {
+    if (ev.name === "text") {
+      for (const ch of Array.from(ev.text ?? "")) this.vimChar(ch);
+      return { type: "handled" };
+    }
+    if (ev.name === "paste") return { type: "handled" };
+    if (ev.name === "escape") {
+      this.resetVimPending();
+      return { type: "handled" };
+    }
+    return undefined; // arrows, Enter (submit), Ctrl-chords keep their usual meaning
+  }
+
+  private vimCountValue(): number {
+    return this.vimCount === "" ? 1 : Math.max(1, Number.parseInt(this.vimCount, 10));
+  }
+
+  private vimChar(ch: string): void {
+    this.clampNormal();
+    if (this.vimArg) {
+      const arg = this.vimArg;
+      this.vimArg = undefined;
+      if (arg === "r") {
+        this.vimReplaceChars(ch);
+      } else if (arg === "g") {
+        if (ch === "g") this.vimApplyMotion(0, false);
+        else this.resetVimPending();
+      } else {
+        this.vimLastFind = { kind: arg, char: ch };
+        this.vimFind(arg, ch);
+      }
+      return;
+    }
+    if (/[1-9]/.test(ch) || (ch === "0" && this.vimCount !== "")) {
+      this.vimCount += ch;
+      return;
+    }
+    const count = this.vimCountValue();
+
+    // Operators and their doubled, line-wise forms (dd, cc, yy).
+    if (ch === "d" || ch === "c" || ch === "y") {
+      if (this.vimOp === ch) {
+        this.vimLinewise(ch, count);
+        return;
+      }
+      this.vimOp = ch;
+      return;
+    }
+
+    switch (ch) {
+      case "f":
+      case "F":
+      case "t":
+      case "T":
+      case "r":
+      case "g":
+        this.vimArg = ch;
+        return;
+      case ";":
+      case ",": {
+        const last = this.vimLastFind;
+        if (!last) break;
+        const flip = { f: "F", F: "f", t: "T", T: "t" } as const;
+        this.vimFind(ch === ";" ? last.kind : flip[last.kind], last.char, true);
+        return;
+      }
+      default:
+        break;
+    }
+
+    // Motions (alone, or the target of a pending operator).
+    const cells = this.units();
+    const text = this.text;
+    const at = this.cursor;
+    let target: number | undefined;
+    let inclusive = false;
+    let vertical: -1 | 1 | undefined;
+    switch (ch) {
+      case "h":
+        target = at;
+        for (let n = 0; n < count && target > this.lineStart(target); n += 1) target = this.prev(target);
+        break;
+      case "l":
+        target = at;
+        for (let n = 0; n < count && this.next(target) < this.lineEnd(target) + (this.vimOp ? 1 : 0) && target < this.lineEnd(target); n += 1) target = this.next(target);
+        break;
+      case "0":
+        target = lineStartOf(text, at);
+        break;
+      case "^":
+        target = firstNonBlank(text, at);
+        break;
+      case "$":
+        target = lineEndOf(text, at);
+        if (!this.vimOp && target > lineStartOf(text, at)) target = this.prev(target);
+        inclusive = false;
+        break;
+      case "w":
+      case "W": {
+        target = wordForward(cells, at, count, ch === "W");
+        // `cw` changes to the end of the word, like `ce`; `dw` never joins the next line.
+        if (this.vimOp === "c") {
+          target = wordEnd(cells, at, count, ch === "W");
+          inclusive = true;
+        } else if (this.vimOp) {
+          target = Math.min(target, lineEndOf(text, at));
+        }
+        break;
+      }
+      case "b":
+      case "B":
+        target = wordBackward(cells, at, count, ch === "B");
+        break;
+      case "e":
+      case "E":
+        target = wordEnd(cells, at, count, ch === "E");
+        inclusive = true;
+        break;
+      case "G":
+        target = this.text.length;
+        if (!this.vimOp) target = this.lineStart(this.text.length);
+        break;
+      case "j":
+        vertical = 1;
+        break;
+      case "k":
+        vertical = -1;
+        break;
+      default:
+        break;
+    }
+
+    if (vertical !== undefined) {
+      if (this.vimOp) {
+        this.vimVerticalOperator(vertical, count);
+        return;
+      }
+      for (let n = 0; n < count; n += 1) {
+        const moved = this.moveVertical(vertical);
+        if (!moved) {
+          if (vertical < 0) this.historyPrev();
+          else this.historyNext();
+          break;
+        }
+      }
+      this.resetVimPending();
+      this.clampNormal();
+      return;
+    }
+    if (target !== undefined) {
+      this.vimApplyMotion(target, inclusive);
+      return;
+    }
+
+    // Single-key commands.
+    this.vimOp = undefined;
+    switch (ch) {
+      case "i":
+        this.enterVimInsert();
+        break;
+      case "a":
+        if (this.text.length > 0 && this.cursor < this.lineEnd(this.cursor)) this.cursor = this.next(this.cursor);
+        this.enterVimInsert();
+        break;
+      case "I":
+        this.cursor = firstNonBlank(this.text, this.cursor);
+        this.enterVimInsert();
+        break;
+      case "A":
+        this.cursor = this.lineEnd(this.cursor);
+        this.enterVimInsert();
+        break;
+      case "o": {
+        this.recordUndo("vim", true);
+        const end = this.lineEnd(this.cursor);
+        this.replaceRange(end, end, "\n");
+        this.enterVimInsert();
+        break;
+      }
+      case "O": {
+        this.recordUndo("vim", true);
+        const start = this.lineStart(this.cursor);
+        this.replaceRange(start, start, "\n");
+        this.cursor = start;
+        this.enterVimInsert();
+        break;
+      }
+      case "x":
+        this.vimDeleteChars(count, "x");
+        break;
+      case "X":
+        this.vimDeleteChars(count, "X");
+        break;
+      case "s":
+        this.vimDeleteChars(count, "x");
+        this.enterVimInsert();
+        break;
+      case "D":
+        this.vimOperate("d", this.cursor, this.lineEnd(this.cursor));
+        break;
+      case "C":
+        this.vimOperate("c", this.cursor, this.lineEnd(this.cursor));
+        break;
+      case "S":
+        this.vimLinewise("c", 1);
+        break;
+      case "Y":
+        this.vimLinewise("y", count);
+        break;
+      case "p":
+        this.vimPaste(true, count);
+        break;
+      case "P":
+        this.vimPaste(false, count);
+        break;
+      case "u":
+        this.undo();
+        break;
+      case "~":
+        this.vimToggleCase(count);
+        break;
+      case "J":
+        this.vimJoin();
+        break;
+      default:
+        break;
+    }
+    this.resetVimPending();
+    if (!this.vimInsert) this.clampNormal();
+  }
+
+  /** Move to `target`, or apply the pending operator over the span from the cursor to it. */
+  private vimApplyMotion(target: number, inclusive: boolean): void {
+    const op = this.vimOp;
+    if (!op) {
+      this.cursor = Math.max(0, Math.min(this.text.length, target));
+      this.goalColumn = undefined;
+      this.lastEdit = "";
+      this.resetVimPending();
+      this.clampNormal();
+      return;
+    }
+    let from = this.cursor;
+    let to = target;
+    if (to < from) [from, to] = [to, from];
+    if (inclusive) to = this.next(to);
+    this.vimOperate(op, from, to);
+  }
+
+  private vimFind(kind: "f" | "F" | "t" | "T", char: string, repeat = false): void {
+    const count = this.vimCountValue();
+    let from = this.cursor;
+    // Repeating `t`/`T` must step past the character it stopped before.
+    if (repeat && (kind === "t" || kind === "T")) from = kind === "t" ? this.next(from) : this.prev(from);
+    const target = findChar(this.text, from, char, kind, count);
+    if (target === undefined) {
+      this.resetVimPending();
+      return;
+    }
+    this.vimApplyMotion(target, kind === "f" || kind === "t");
+  }
+
+  private vimOperate(op: "d" | "c" | "y", from: number, to: number): void {
+    if (to < from) [from, to] = [to, from];
+    this.resetVimPending();
+    if (to === from && op !== "c") return;
+    this.vimRegister = { text: this.text.slice(from, to), linewise: false };
+    if (op === "y") {
+      this.cursor = from;
+      this.clampNormal();
+      return;
+    }
+    this.recordUndo("vim", true);
+    this.replaceRange(from, to, "");
+    this.cursor = from;
+    if (op === "c") this.enterVimInsert();
+    else this.clampNormal();
+  }
+
+  private vimLinewise(op: "d" | "c" | "y", count: number): void {
+    this.resetVimPending();
+    const start = this.lineStart(this.cursor);
+    let end = this.cursor;
+    for (let n = 0; n < count; n += 1) {
+      end = this.lineEnd(end);
+      if (n < count - 1 && end < this.text.length) end += 1;
+    }
+    const body = this.text.slice(start, end);
+    this.vimRegister = { text: body, linewise: true };
+    if (op === "y") return;
+    this.recordUndo("vim", true);
+    if (op === "c") {
+      this.replaceRange(start, end, "");
+      this.cursor = start;
+      this.enterVimInsert();
+      return;
+    }
+    // dd removes the line and its newline (the one before it for the last line).
+    const removeFrom = end < this.text.length ? start : Math.max(0, start - 1);
+    const removeTo = end < this.text.length ? end + 1 : end;
+    this.replaceRange(removeFrom, removeTo, "");
+    this.cursor = Math.min(removeFrom < start ? removeFrom + 1 : removeFrom, this.text.length);
+    this.cursor = this.lineStart(Math.min(this.cursor, this.text.length));
+    this.clampNormal();
+  }
+
+  private vimVerticalOperator(direction: -1 | 1, count: number): void {
+    const op = this.vimOp as "d" | "c" | "y";
+    this.resetVimPending();
+    let start = this.lineStart(this.cursor);
+    let end = this.lineEnd(this.cursor);
+    for (let n = 0; n < count; n += 1) {
+      if (direction > 0) {
+        if (end >= this.text.length) break;
+        end = this.lineEnd(end + 1);
+      } else {
+        if (start === 0) break;
+        start = this.lineStart(start - 1);
+      }
+    }
+    this.cursor = start;
+    const lines = this.text.slice(start, end).split("\n").length;
+    this.vimLinewise(op, lines);
+  }
+
+  private vimDeleteChars(count: number, kind: "x" | "X"): void {
+    this.resetVimPending();
+    if (this.text.length === 0) return;
+    const lineStart = this.lineStart(this.cursor);
+    const lineEnd = this.lineEnd(this.cursor);
+    let from = this.cursor;
+    let to = this.cursor;
+    if (kind === "x") {
+      for (let n = 0; n < count && to < lineEnd; n += 1) to = this.next(to);
+    } else {
+      for (let n = 0; n < count && from > lineStart; n += 1) from = this.prev(from);
+    }
+    if (from === to) return;
+    this.vimRegister = { text: this.text.slice(from, to), linewise: false };
+    this.recordUndo("vim", true);
+    this.replaceRange(from, to, "");
+    this.cursor = from;
+    this.clampNormal();
+  }
+
+  private vimReplaceChars(ch: string): void {
+    const count = this.vimCountValue();
+    this.resetVimPending();
+    let to = this.cursor;
+    for (let n = 0; n < count && to < this.lineEnd(this.cursor); n += 1) to = this.next(to);
+    if (to === this.cursor) return;
+    this.recordUndo("vim", true);
+    const replaced = ch.repeat(count);
+    const from = this.cursor;
+    this.replaceRange(from, to, replaced);
+    this.cursor = from + replaced.length - ch.length;
+  }
+
+  private vimPaste(after: boolean, count: number): void {
+    const { text, linewise } = this.vimRegister;
+    this.resetVimPending();
+    if (text.length === 0) return;
+    this.recordUndo("vim", true);
+    if (linewise) {
+      const at = after ? this.lineEnd(this.cursor) : this.lineStart(this.cursor);
+      const block = Array.from({ length: count }, () => text).join("\n");
+      if (after) {
+        this.replaceRange(at, at, `\n${block}`);
+        this.cursor = at + 1;
+      } else {
+        this.replaceRange(at, at, `${block}\n`);
+        this.cursor = at;
+      }
+    } else {
+      const at = after && this.cursor < this.lineEnd(this.cursor) ? this.next(this.cursor) : this.cursor;
+      const block = text.repeat(count);
+      this.replaceRange(at, at, block);
+      this.cursor = Math.max(at, at + block.length - 1);
+    }
+    this.clampNormal();
+  }
+
+  private vimToggleCase(count: number): void {
+    this.resetVimPending();
+    let to = this.cursor;
+    for (let n = 0; n < count && to < this.lineEnd(this.cursor); n += 1) to = this.next(to);
+    if (to === this.cursor) return;
+    const original = this.text.slice(this.cursor, to);
+    const toggled = Array.from(original)
+      .map((c) => (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()))
+      .join("");
+    this.recordUndo("vim", true);
+    const from = this.cursor;
+    this.replaceRange(from, to, toggled);
+    this.cursor = Math.min(to, this.text.length);
+    this.clampNormal();
+  }
+
+  private vimJoin(): void {
+    this.resetVimPending();
+    const end = this.lineEnd(this.cursor);
+    if (end >= this.text.length) return;
+    this.recordUndo("vim", true);
+    let after = end + 1;
+    while (after < this.text.length && /[ \t]/.test(this.text[after])) after += 1;
+    this.replaceRange(end, after, " ");
+    this.cursor = end;
   }
 
   // --- submit -------------------------------------------------------------------------

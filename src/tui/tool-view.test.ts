@@ -30,7 +30,10 @@ describe("describeCall", () => {
   });
 
   it("builds the short activity label", () => {
-    expect(activityLabel({ name: "shell", arguments: { command: "make -j8" } })).toBe("run: make -j8");
+    expect(activityLabel({ name: "shell", arguments: { command: "make -j8" } })).toBe("Running make -j8");
+    expect(activityLabel({ name: "read_file", arguments: { path: "src/a.ts" } })).toBe("Reading src/a.ts");
+    expect(activityLabel({ name: "grep", arguments: { pattern: "foo" } })).toBe('Searching "foo"');
+    expect(activityLabel({ name: "mcp__github__create_issue", arguments: {} })).toContain("Calling github › create_issue");
   });
 });
 

@@ -44,6 +44,8 @@ export interface CommandContext {
   runPrompt(prompt: string, display: string): Promise<void>;
   adoptSession(snapshot: SessionSnapshot): void;
   refreshStatus(): void;
+  /** Toggle Vim editing in the prompt; returns the new state. */
+  toggleVim(): boolean;
 }
 
 /** Models worth suggesting for `/model`, by provider. */
@@ -342,6 +344,17 @@ export async function runCommand(ctx: CommandContext, name: string, arg: string)
       return true;
     }
 
+    case "/vim": {
+      const on = ctx.toggleVim();
+      try {
+        saveUserConfig({ vim: on });
+      } catch {
+        // not persisting is fine
+      }
+      renderer.success(on ? "Vim mode on — Esc for normal mode, i/a/o to insert. /vim turns it off." : "Vim mode off.");
+      return true;
+    }
+
     case "/theme": {
       const value = arg.toLowerCase();
       if (!value) {
@@ -538,6 +551,7 @@ function showHelp(ctx: CommandContext): void {
     ["Ctrl+O", "show more tool output"],
     ["Ctrl+W · Ctrl+U · Ctrl+K · Ctrl+Y", "delete word · to line start · to line end · paste it back"],
     ["Alt+← → · Ctrl+_", "move by word · undo"],
+    ["/vim", "Vim-style editing in the prompt"],
     ["Ctrl+L · Ctrl+Z", "clear screen · suspend"],
     ["@path", "attach a file"],
     ["!command", "run a shell command yourself"],

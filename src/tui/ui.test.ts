@@ -253,6 +253,38 @@ describe("TerminalUI", () => {
     ui.unmount();
   });
 
+  it("Vim mode: Esc leaves insert mode (not clear/interrupt), shows the mode, and switches the cursor shape", () => {
+    const writes: string[] = [];
+    const onInterrupt = vi.fn();
+    const { term, stdin, stdout, ui, editor } = setup({ hooks: { onInterrupt } });
+    const original = stdout.write.bind(stdout);
+    stdout.write = (data: string) => {
+      writes.push(data);
+      return original(data);
+    };
+    editor.setVim(true);
+    ui.mount();
+    stdin.type("hello");
+    expect(screen(term)).toContain("-- INSERT --");
+    stdin.type("\x1b");
+    expect(editor.vimModeName()).toBe("NORMAL");
+    expect(editor.getText()).toBe("hello");
+    expect(screen(term)).toContain("-- NORMAL --");
+    stdin.type("\x1b"); // another Esc in normal mode must not wipe the prompt
+    expect(editor.getText()).toBe("hello");
+    // While a task runs, Esc on an empty prompt still interrupts.
+    editor.setText("");
+    stdin.type("i");
+    ui.setBusy(true);
+    stdin.type("\x1b");
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+    ui.unmount();
+    const all = writes.join("");
+    expect(all).toContain("\u001b[6 q"); // bar in insert mode
+    expect(all).toContain("\u001b[2 q"); // block in normal mode
+    expect(all.endsWith("\u001b[0 q") || all.includes("\u001b[0 q")).toBe(true);
+  });
+
   it("types multi-line input with Shift+Enter and grows the box", () => {
     const { term, stdin, ui } = setup({ rows: 20 });
     ui.mount();

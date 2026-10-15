@@ -59,6 +59,10 @@ export interface Ui {
   setBusy(busy: boolean, label?: string): void;
   /** A short message in the status line (fades after a couple of seconds). */
   hint(text: string): void;
+  /** A dim line under the activity line: what the model is thinking / what a command just printed. */
+  setThought(text: string | undefined): void;
+  /** The latest output line of a running command. */
+  setToolOutput(text: string | undefined): void;
   /** Extra detail on the activity line, e.g. "HTTP 503 — retrying in 4s" (clears itself after `ttlMs`). */
   setNote(text: string | undefined, ttlMs?: number): void;
   beginTool(id: string, label: string): void;
@@ -134,6 +138,8 @@ export class TerminalUI implements Ui {
   private readonly tools = new Map<string, { label: string; start: number }>();
   private tokens = 0;
   private tail: string | undefined;
+  private thought: string | undefined;
+  private toolOutput: string | undefined;
   private queue: Array<{ text: string; display: string }> = [];
   private waiter: ((input: UiInput) => void) | undefined;
   private exitRequested = false;
@@ -153,6 +159,7 @@ export class TerminalUI implements Ui {
   private resizeTimer: NodeJS.Timeout | undefined;
   private escTimer: NodeJS.Timeout | undefined;
   private suspended = false;
+  private cursorShape: string | undefined;
   private suspendKeepAlive: NodeJS.Timeout | undefined;
   private restoreConsole: (() => void) | undefined;
 
@@ -204,6 +211,7 @@ export class TerminalUI implements Ui {
     this.options.stdin.off("data", this.onData);
     this.options.stdout.off("resize", this.onResize);
     process.off("SIGCONT", this.onContinue);
+    if (this.cursorShape !== undefined) this.options.stdout.write("\u001b[0 q");
     this.modes.leave();
     if (this.options.title) this.options.stdout.write(titleSequence(""));
   }
@@ -286,7 +294,7 @@ export class TerminalUI implements Ui {
       this.armExit("Ctrl-D");
       return;
     }
-    if (ev.name === "escape" && this.busy && !this.editor.menuView() && !this.editor.searching()) {
+    if (ev.name === "escape" && this.busy && !this.editor.consumesEscape(true)) {
       this.interrupt();
       return;
     }
@@ -321,7 +329,7 @@ export class TerminalUI implements Ui {
       }
       return;
     }
-    if (result.type === "unhandled" && ev.name === "escape" && !this.editor.isEmpty()) {
+    if (result.type === "unhandled" && ev.name === "escape" && !this.editor.isEmpty() && !this.editor.isVim()) {
       this.editor.clear();
     }
   }
@@ -462,6 +470,8 @@ export class TerminalUI implements Ui {
     } else {
       this.tools.clear();
       this.tail = undefined;
+      this.thought = undefined;
+      this.toolOutput = undefined;
       if (this.hintState?.text === "Interrupting…") this.hintState = undefined;
     }
     this.setTitle(busy);
@@ -478,12 +488,24 @@ export class TerminalUI implements Ui {
   endTool(id: string): void {
     this.lastActivityAt = Date.now();
     this.tools.delete(id);
+    if (this.tools.size === 0) this.toolOutput = undefined;
     this.scheduleRedraw();
   }
 
   hint(text: string): void {
     this.setHint(text);
     this.redraw();
+  }
+
+  setThought(text: string | undefined): void {
+    this.thought = text && text.length > 0 ? text : undefined;
+    this.scheduleRedraw();
+  }
+
+  setToolOutput(text: string | undefined): void {
+    this.toolOutput = text && text.length > 0 ? text : undefined;
+    if (text) this.lastActivityAt = Date.now();
+    this.scheduleRedraw();
   }
 
   setNote(text: string | undefined, ttlMs = 5000): void {
@@ -527,7 +549,7 @@ export class TerminalUI implements Ui {
       const more = this.tools.size > 1 ? ` (+${this.tools.size - 1} more)` : "";
       const parts = [formatDuration(now - first.start)];
       if (!interrupting) parts.push("esc to interrupt");
-      return { label: `Running ${first.label}${more}`, meta: parts.join(dot), mode: "spin", frame: this.frameNo };
+      return { label: `${first.label}${more}`, meta: parts.join(dot), mode: "spin", frame: this.frameNo };
     }
     const word = this.busyLabel ?? THINKING_STATUS_MESSAGES[(this.flavorSeed + Math.floor(elapsed / 9000)) % THINKING_STATUS_MESSAGES.length];
     const parts = [formatDuration(elapsed)];
@@ -633,8 +655,10 @@ export class TerminalUI implements Ui {
       rows: this.screen.rows,
       tail: this.tail,
       activity: this.activity(now),
+      detail: this.tools.size > 0 ? this.toolOutput : this.tail ? undefined : this.thought,
       queue: this.queue.map((q) => q.display),
       editor: this.editor,
+      vim: this.editor.vimModeName(),
       placeholder: this.busy ? "Type to queue a message…" : "Ask RevCode…   / for commands · @ for files · shift+enter for a new line",
       minimal: this.options.minimal,
       status: this.options.status(),
@@ -655,9 +679,19 @@ export class TerminalUI implements Ui {
     }
     try {
       this.screen.draw(this.frame());
+      this.syncCursorShape();
     } catch (error) {
       this.logFault(error);
     }
+  }
+
+  /** Vim mode: a block cursor in normal mode, a bar in insert mode. */
+  private syncCursorShape(): void {
+    const mode = this.editor.vimModeName();
+    const shape = mode === undefined ? undefined : mode === "NORMAL" ? "\u001b[2 q" : "\u001b[6 q";
+    if (shape === this.cursorShape) return;
+    this.cursorShape = shape;
+    this.options.stdout.write(shape ?? "\u001b[0 q");
   }
 
   /** Coalesce bursts (streaming tokens) into at most one repaint per ~16ms. */
@@ -777,6 +811,8 @@ export class PlainUI implements Ui {
   setBusy(): void {}
   hint(): void {}
   setNote(): void {}
+  setThought(): void {}
+  setToolOutput(): void {}
   beginTool(): void {}
   endTool(): void {}
   addTokens(): void {}
