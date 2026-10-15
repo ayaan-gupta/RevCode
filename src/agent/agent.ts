@@ -587,7 +587,8 @@ export class Agent {
     }
 
     this.lastReceipt = receipt;
-    if (result.toolCalls > 0) {
+    // A receipt documents what changed or ran; a read-only turn has nothing to report.
+    if (receipt.files.length > 0 || receipt.commands.length > 0 || receipt.toolErrors > 0) {
       this.renderer.receipt(receiptLines);
     }
     this.renderer.turnSummary({
@@ -705,10 +706,10 @@ export class Agent {
     this.sessionCreatedAt = snapshot.meta.createdAt;
     this.renderer.setContextPercent((rt.engine.estimatedTokens() / rt.profile.contextLimit) * 100);
     this.renderer.success(`Resumed “${snapshot.meta.title}” — ${plural(rest.length, "message")}.`);
-    const lastUser = [...rest].reverse().find((m) => m.role === "user" && !m.content.startsWith("[harness]"));
-    const lastAssistant = [...rest].reverse().find((m) => m.role === "assistant" && m.content.trim().length > 0);
-    if (lastUser) this.renderer.echoUser(lastUser.content.split("\n")[0].slice(0, 200));
-    if (lastAssistant) this.renderer.assistant(lastAssistant.content);
+    const lastUser = [...rest].reverse().find((m) => m.role === "user" && !(m.content ?? "").startsWith("[harness]"));
+    const lastAssistant = [...rest].reverse().find((m) => m.role === "assistant" && (m.content ?? "").trim().length > 0);
+    if (lastUser) this.renderer.echoUser((lastUser.content ?? "").split("\n")[0].slice(0, 200));
+    if (lastAssistant) this.renderer.assistant(lastAssistant.content ?? "");
   }
 
   private async handleSlashCommand(line: string): Promise<boolean> {

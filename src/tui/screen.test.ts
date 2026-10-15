@@ -125,6 +125,15 @@ describe("LiveScreen", () => {
     expect(out.writes.length).toBeGreaterThan(2);
   });
 
+  it("counts the rows the cursor line reflows into when moving back up after a narrower resize", () => {
+    const { term, screen, out } = setup(40, 10);
+    screen.draw({ lines: ["---", `> ${"a".repeat(33)}`], cursor: { row: 1, col: 35 } });
+    term.resize(20, 10);
+    screen.beginResize();
+    // 1 row above + the cursor line's own 35 columns now span two rows of 20 (one extra up).
+    expect(out.writes.at(-1)).toBe("\u001b[2A\r\u001b[J");
+  });
+
   it("wraps each update in synchronized-output markers and hides the cursor while painting", () => {
     const { screen, out } = setup();
     screen.draw(frame("---", "> a", "---"));

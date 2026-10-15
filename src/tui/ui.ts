@@ -238,9 +238,11 @@ export class TerminalUI implements Ui {
 
   private readonly onData = (chunk: string | Buffer): void => {
     const data = typeof chunk === "string" ? chunk : chunk.toString("utf8");
-    for (const ev of this.parser.feed(data)) this.guarded(() => this.handleKey(ev));
+    this.guarded(() => {
+      for (const ev of this.parser.feed(data)) this.guarded(() => this.handleKey(ev));
+    });
     if (this.escTimer) clearTimeout(this.escTimer);
-    if (this.parser.hasPending) {
+    if (this.parser.hasPending && !this.parser.inPaste) {
       this.escTimer = setTimeout(() => {
         for (const ev of this.parser.flush()) this.guarded(() => this.handleKey(ev));
         this.redraw();
@@ -290,7 +292,7 @@ export class TerminalUI implements Ui {
       this.onCtrlC();
       return;
     }
-    if (ev.ctrl && ev.name === "d" && this.editor.isEmpty() && !this.editor.searching()) {
+    if (ev.ctrl && ev.name === "d" && !this.busy && this.editor.isEmpty() && !this.editor.searching()) {
       this.armExit("Ctrl-D");
       return;
     }
@@ -342,6 +344,10 @@ export class TerminalUI implements Ui {
         return;
       }
       this.interrupt();
+      return;
+    }
+    if (this.editor.searching()) {
+      this.editor.cancelSearch();
       return;
     }
     if (!this.editor.isEmpty()) {
@@ -456,6 +462,7 @@ export class TerminalUI implements Ui {
 
   setBusy(busy: boolean, label?: string): void {
     this.busyLabel = busy ? label : undefined;
+    this.lastInterruptAt = 0; // an interrupt belongs to the turn it interrupted
     if (busy === this.busy) {
       this.redraw();
       return;

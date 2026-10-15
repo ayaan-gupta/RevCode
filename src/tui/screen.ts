@@ -100,9 +100,11 @@ export class LiveScreen {
   beginResize(): void {
     if (!this.drawn) return;
     const cols = Math.max(1, this.out.columns || 80);
-    const { widths, cursorRow } = this.drawn;
+    const { widths, cursorRow, cursorCol } = this.drawn;
     let up = 0;
     for (let i = 0; i < cursorRow; i += 1) up += Math.max(1, Math.ceil(widths[i] / cols));
+    // The cursor's own row may reflow too: columns past the new width land on rows above it.
+    up += Math.floor(cursorCol / cols);
     let buf = "";
     if (up > 0) buf += `${ESC}[${up}A`;
     buf += `\r${CLEAR_BELOW}`;

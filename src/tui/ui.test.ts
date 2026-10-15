@@ -53,6 +53,8 @@ function setup(options: { cols?: number; rows?: number; hooks?: UiHooks } = {}) 
 }
 
 const screen = (term: MiniTerminal): string => term.lines().join("\n");
+/** A lone Esc is held briefly to tell it from the start of an escape sequence. */
+const settle = (ms = 80): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 describe("TerminalUI", () => {
   it("mounts a prompt box with a status line and puts the terminal in raw mode", () => {
@@ -115,7 +117,7 @@ describe("TerminalUI", () => {
     ui.unmount();
   });
 
-  it("Esc interrupts a running turn and returns queued messages to the prompt", () => {
+  it("Esc interrupts a running turn and returns queued messages to the prompt", async () => {
     const onInterrupt = vi.fn();
     const { stdin, ui, editor } = setup({ hooks: { onInterrupt } });
     ui.mount();
@@ -123,8 +125,65 @@ describe("TerminalUI", () => {
     stdin.type("queued one");
     stdin.type("\r");
     stdin.type("\x1b");
+    await settle();
     expect(onInterrupt).toHaveBeenCalledTimes(1);
     expect(editor.getText()).toBe("queued one");
+    ui.unmount();
+  });
+
+  it("a stale interrupt does not turn the next turn's first Ctrl+C into a force exit", () => {
+    const onInterrupt = vi.fn();
+    const onForceExit = vi.fn();
+    const { stdin, ui } = setup({ hooks: { onInterrupt, onForceExit } });
+    ui.mount();
+    ui.setBusy(true);
+    stdin.type("\x03");
+    expect(onInterrupt).toHaveBeenCalledTimes(1);
+    ui.setBusy(false);
+    ui.setBusy(true);
+    stdin.type("\x03");
+    expect(onInterrupt).toHaveBeenCalledTimes(2);
+    expect(onForceExit).not.toHaveBeenCalled();
+    stdin.type("\x03"); // a second press during the same turn still forces the exit
+    expect(onForceExit).toHaveBeenCalledTimes(1);
+    ui.unmount();
+  });
+
+  it("Ctrl+D while a task runs neither exits nor disturbs the queue", async () => {
+    const onForceExit = vi.fn();
+    const { stdin, ui } = setup({ hooks: { onForceExit } });
+    ui.mount();
+    ui.setBusy(true);
+    stdin.type("queued");
+    stdin.type("\r");
+    stdin.type("\x04");
+    stdin.type("\x04");
+    expect(onForceExit).not.toHaveBeenCalled();
+    ui.setBusy(false);
+    await expect(ui.nextInput()).resolves.toMatchObject({ type: "submit", text: "queued" });
+    ui.unmount();
+  });
+
+  it("Ctrl+C leaves history search instead of clearing or exiting", () => {
+    const { stdin, ui, editor } = setup();
+    ui.mount();
+    stdin.type("draft");
+    stdin.type("\x12"); // Ctrl+R
+    expect(editor.searching()).toBe(true);
+    stdin.type("\x03");
+    expect(editor.searching()).toBe(false);
+    expect(editor.getText()).toBe("draft");
+    ui.unmount();
+  });
+
+  it("holds a bracketed paste together even when the idle timer fires mid-paste", async () => {
+    const { stdin, ui, editor } = setup({ rows: 20 });
+    ui.mount();
+    stdin.type("\x1b[200~first half\n");
+    await settle();
+    stdin.type("second half\x1b[201~");
+    expect(editor.getText().replace(/\n/g, " ")).toContain("first half");
+    expect(editor.getText()).toContain("second half");
     ui.unmount();
   });
 
@@ -253,7 +312,7 @@ describe("TerminalUI", () => {
     ui.unmount();
   });
 
-  it("Vim mode: Esc leaves insert mode (not clear/interrupt), shows the mode, and switches the cursor shape", () => {
+  it("Vim mode: Esc leaves insert mode (not clear/interrupt), shows the mode, and switches the cursor shape", async () => {
     const writes: string[] = [];
     const onInterrupt = vi.fn();
     const { term, stdin, stdout, ui, editor } = setup({ hooks: { onInterrupt } });
@@ -267,16 +326,19 @@ describe("TerminalUI", () => {
     stdin.type("hello");
     expect(screen(term)).toContain("-- INSERT --");
     stdin.type("\x1b");
+    await settle();
     expect(editor.vimModeName()).toBe("NORMAL");
     expect(editor.getText()).toBe("hello");
     expect(screen(term)).toContain("-- NORMAL --");
     stdin.type("\x1b"); // another Esc in normal mode must not wipe the prompt
+    await settle();
     expect(editor.getText()).toBe("hello");
     // While a task runs, Esc on an empty prompt still interrupts.
     editor.setText("");
     stdin.type("i");
     ui.setBusy(true);
     stdin.type("\x1b");
+    await settle();
     expect(onInterrupt).toHaveBeenCalledTimes(1);
     ui.unmount();
     const all = writes.join("");

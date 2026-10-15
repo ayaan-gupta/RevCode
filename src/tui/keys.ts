@@ -71,8 +71,9 @@ const CSI_TILDE_KEYS: Record<number, string> = {
   24: "f12",
 };
 
-/** Map a Unicode code point from a `CSI u` / modifyOtherKeys report to a key name. */
-function nameForCodePoint(code: number): string {
+/** Map a Unicode code point from a `CSI u` / modifyOtherKeys report to a key name (undefined if invalid). */
+function nameForCodePoint(code: number): string | undefined {
+  if (!Number.isInteger(code) || code < 0 || code > 0x10ffff || (code >= 0xd800 && code <= 0xdfff)) return undefined;
   switch (code) {
     case 9:
       return "tab";
@@ -157,13 +158,19 @@ export class KeyParser {
     return events;
   }
 
+  /** True while a bracketed paste is being collected (everything is paste content until it ends). */
+  get inPaste(): boolean {
+    return this.paste !== undefined;
+  }
+
   /** True while an incomplete escape sequence is buffered (call `flush` after a short idle delay). */
   get hasPending(): boolean {
     return this.pending.length > 0;
   }
 
-  /** Emit a lone pending ESC (call after a short idle delay). */
+  /** Emit a lone pending ESC (call after a short idle delay). Never interrupts a paste in progress. */
   flush(): KeyEvent[] {
+    if (this.paste !== undefined) return [];
     const pending = this.pending;
     this.pending = "";
     if (pending === "\u001b") return [event("escape")];
@@ -198,10 +205,9 @@ export class KeyParser {
 
   /** Returns the number of chars consumed, or 0 when the sequence is incomplete. */
   private parseEscape(data: string, out: KeyEvent[]): number {
-    if (data.length === 1) {
-      out.push(event("escape"));
-      return 1;
-    }
+    // A lone ESC at the end of a read is either the Escape key or the start of a sequence split
+    // across reads; wait for the idle flush to decide rather than guessing.
+    if (data.length === 1) return 0;
     const next = data[1];
 
     if (next === "[") {
@@ -285,15 +291,16 @@ export class KeyParser {
       case "u": {
         // kitty keyboard protocol: CSI codepoint ; modifiers u
         const code = numbers[0];
-        if (code === undefined) return event("response", {}, raw);
+        const name = code === undefined ? undefined : nameForCodePoint(code);
+        if (name === undefined) return event("response", {}, raw);
         const mods = decodeModifiers(numbers[1]);
-        const name = nameForCodePoint(code);
         return event(name, mods, name.length === 1 && !mods.ctrl && !mods.alt ? name : undefined);
       }
       case "~": {
         if (numbers[0] === 27 && numbers[2] !== undefined) {
           // xterm modifyOtherKeys: CSI 27 ; modifiers ; codepoint ~
-          return event(nameForCodePoint(numbers[2]), decodeModifiers(numbers[1]));
+          const name = nameForCodePoint(numbers[2]);
+          return name === undefined ? event("response", {}, raw) : event(name, decodeModifiers(numbers[1]));
         }
         const name = numbers[0] === undefined ? undefined : CSI_TILDE_KEYS[numbers[0]];
         return name ? event(name, decodeModifiers(numbers[1])) : event("response", {}, raw);

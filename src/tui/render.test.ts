@@ -44,6 +44,15 @@ describe("TerminalRenderer: transcript layout", () => {
     expect(ui.text()).toContain("  • one");
   });
 
+  it("strips terminal escape sequences from streamed model output", () => {
+    const { ui, r } = make();
+    r.streamDelta("safe \u001b]0;pwned\u0007text \u001b[31mred\u001b[0m\nnext \u001b");
+    r.streamDelta("[2Jline\n");
+    r.streamEnd();
+    expect(ui.text()).not.toContain("\u001b");
+    expect(ui.text()).toContain("safe text red");
+  });
+
   it("streams text: finished rows are committed, the unfinished line is the tail", () => {
     const { ui, r } = make();
     r.streamDelta("Hello wor");

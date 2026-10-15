@@ -315,7 +315,7 @@ export async function runCommand(ctx: CommandContext, name: string, arg: string)
 
     case "/copy": {
       let text = renderer.getLastAssistantText();
-      if (!text) text = [...rt.engine.messages].reverse().find((m) => m.role === "assistant" && m.content.trim())?.content ?? "";
+      if (!text) text = [...rt.engine.messages].reverse().find((m) => m.role === "assistant" && (m.content ?? "").trim())?.content ?? "";
       if (!text.trim()) {
         say("Nothing to copy yet.");
         return true;

@@ -227,7 +227,8 @@ export class TerminalRenderer {
     }
     this.streamText += delta;
     this.ui.addTokens(delta.length / 4);
-    const { lines, tail } = this.md.push(delta);
+    // Model output is untrusted: strip terminal escapes before it reaches the screen.
+    const { lines, tail } = this.md.push(sanitizeForDisplay(delta));
     if (lines.length > 0) this.ui.print(this.indent(lines));
     this.ui.setTail(tail.length > 0 ? this.indent(tail.split("\n")) : undefined);
   }

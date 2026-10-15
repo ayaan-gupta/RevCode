@@ -177,6 +177,16 @@ export class LineEditor {
     return this.search !== undefined;
   }
 
+  /** Leave reverse search and restore what was typed before it. */
+  cancelSearch(): void {
+    const search = this.search;
+    if (!search) return;
+    this.text = search.saved.text;
+    this.cursor = search.saved.cursor;
+    this.search = undefined;
+    this.afterChange();
+  }
+
   // --- vim mode ----------------------------------------------------------------------
 
   setVim(enabled: boolean): void {

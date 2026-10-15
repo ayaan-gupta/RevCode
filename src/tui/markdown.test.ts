@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MarkdownStream, renderInline, renderMarkdownRows } from "./markdown.js";
+import { hasOpenSpan, MarkdownStream, renderInline, renderMarkdownRows } from "./markdown.js";
 import { plainStyle, Style } from "./style.js";
 import { stripAnsi, visibleWidth } from "./width.js";
 
@@ -221,5 +221,46 @@ describe("MarkdownStream: very long lines", () => {
     const result = stream.push("word ".repeat(1500));
     expect(result.tail.startsWith("…")).toBe(true);
     expect(result.tail.length).toBeLessThan(200);
+  });
+});
+
+describe("MarkdownStream: chunking never changes the output", () => {
+  const long = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega";
+  const documents: Record<string, string> = {
+    "pipes late in a wrapped paragraph": `${long} then run ps aux | grep node | head to look\nnext line\n`,
+    "pipes late in a paragraph at end of input": `${long} then run ps aux | grep node | head`,
+    "leading italic span across many rows": `*${long} ${long}* and done\n`,
+    "leading bold span across many rows": `**${long} ${long}** and done\n`,
+    "backtick span closing late": `${long} \`code that ${long} ends\` tail\n`,
+    "link label spanning rows": `${long} [${long}](https://example.com/a/b) tail\n`,
+    "heading with pipes": "# a | b | c\n\ntext\n",
+    "numbered item with pipes": "1. a | b | c\n2. d | e | f\n",
+    "quote with pipes": "> a | b | c\nplain\n",
+    "table after paragraph": `${long}\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nend\n`,
+    "two pipe lines that are not a table": "a | b | c\nd | e | f\ntext\n",
+    "unclosed emphasis that never closes": `${long} *unclosed ${long}\nnext\n`,
+  };
+  for (const [name, text] of Object.entries(documents)) {
+    it(name, () => {
+      const whole = renderMarkdownRows(text, { style: plain, width: 30 });
+      for (const size of [1, 2, 3, 5, 8, 13, 50]) {
+        const stream = new MarkdownStream({ style: plain, width: 30 });
+        const out: string[] = [];
+        for (let i = 0; i < text.length; i += size) out.push(...stream.push(text.slice(i, i + size)).lines);
+        out.push(...stream.flush());
+        expect(out, `chunk size ${size}`).toEqual(whole);
+      }
+    });
+  }
+
+  it("detects spans that may still close", () => {
+    for (const open of ["a `b", "a **b c", "a *b c", "a [b", "a [b]", "a [b](http://x", "a <https://x.test", "a ~~b c"]) expect(hasOpenSpan(open), open).toBe(true);
+    for (const closed of ["a `b` c", "a **b** c", "2 * 3 * 4", "snake_case_name", "a [b](http://x) c", "- item", "a [b] c", "plain text"]) expect(hasOpenSpan(closed), closed).toBe(false);
+  });
+
+  it("keeps a header-only table that is too narrow to draw", () => {
+    const out = renderMarkdownRows("| alpha | beta | gamma |\n|---|---|---|\n", { style: plain, width: 12 });
+    expect(out.join(" ")).toContain("alpha");
+    expect(out.join(" ")).toContain("gamma");
   });
 });

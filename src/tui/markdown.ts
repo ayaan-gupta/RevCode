@@ -225,6 +225,83 @@ export function renderInline(text: string, style: Style, autolink = true): strin
   return out;
 }
 
+/**
+ * True when `text` ends inside an inline span that may still close (an unmatched backtick, emphasis
+ * marker, link bracket or `<url`). `renderInline` is greedy, so such a span changes how earlier
+ * text renders once it closes — the streaming renderer must not commit rows past that point.
+ */
+export function hasOpenSpan(text: string): boolean {
+  const n = text.length;
+  let i = 0;
+  while (i < n) {
+    const c = text[i];
+    if (c === "\\") {
+      i += 2;
+      continue;
+    }
+    if (c === "`") {
+      let run = 1;
+      while (text[i + run] === "`") run += 1;
+      let search = i + run;
+      let close = -1;
+      while (search < n) {
+        const idx = text.indexOf("`", search);
+        if (idx === -1) break;
+        let len = 1;
+        while (text[idx + len] === "`") len += 1;
+        if (len === run) {
+          close = idx;
+          break;
+        }
+        search = idx + len;
+      }
+      if (close === -1) return true;
+      i = close + run;
+      continue;
+    }
+    if (c === "[") {
+      let depth = 0;
+      let close = -1;
+      for (let j = i; j < n; j += 1) {
+        if (text[j] === "\\") {
+          j += 1;
+        } else if (text[j] === "[") {
+          depth += 1;
+        } else if (text[j] === "]") {
+          depth -= 1;
+          if (depth === 0) {
+            close = j;
+            break;
+          }
+        }
+      }
+      if (close === -1 || close === n - 1) return true;
+      if (text[close + 1] === "(" && !text.includes(")", close + 2)) return true;
+      i += 1;
+      continue;
+    }
+    if (c === "<") {
+      if (/^<https?:\/\/[^>\s]*$/.test(text.slice(i))) return true;
+      i += 1;
+      continue;
+    }
+    if (c === "*" || c === "_" || c === "~") {
+      let run = 1;
+      while (text[i + run] === c) run += 1;
+      const next = text[i + run];
+      const opens = next !== undefined && !/\s/.test(next) && !(c === "_" && isWordChar(text[i - 1]));
+      if (opens && (c !== "~" || run >= 2)) {
+        const marker = run >= 2 ? c.repeat(2) : c;
+        if (findClosingRun(text, i + run, marker) === -1) return true;
+      }
+      i += run;
+      continue;
+    }
+    i += 1;
+  }
+  return false;
+}
+
 // --- tables ---------------------------------------------------------------------------------
 
 type Align = "left" | "center" | "right";
@@ -288,6 +365,7 @@ function renderTable(header: string[], aligns: Align[], body: string[][], option
   if (available < minWidth.reduce((a, b) => a + b, 0)) {
     // Too narrow for a grid: stack each row as "header: value" lines.
     const out: string[] = [];
+    if (body.length === 0) out.push(...wrapAnsi(header.map((name) => style.bold(renderInline(name, style))).join(" · "), width));
     body.forEach((row, index) => {
       if (index > 0) out.push("");
       header.forEach((name, c) => {
@@ -352,6 +430,8 @@ export class MarkdownStream {
   private fence: Fence | undefined;
   private highlighter: Highlighter | undefined;
   private pendingHeader: string | undefined;
+  /** Rows of `pendingHeader` already printed while it was still streaming as a plain line. */
+  private headerCommitted = 0;
   private table: { header: string[]; aligns: Align[]; rows: string[][] } | undefined;
   private lastBlank = true;
   private started = false;
@@ -397,13 +477,16 @@ export class MarkdownStream {
       const text = this.buffer;
       const skip = this.committed;
       this.buffer = "";
+      const rows = this.completeLine(text).slice(skip);
       this.committed = 0;
-      emit(this.completeLine(text).slice(skip));
+      emit(rows);
     }
     if (this.pendingHeader !== undefined) {
       const header = this.pendingHeader;
+      const skip = this.headerCommitted;
       this.pendingHeader = undefined;
-      emit(this.paragraph(header));
+      this.headerCommitted = 0;
+      emit(this.block(header).slice(skip));
     }
     if (this.table) emit(this.flushTable());
     if (this.fence) {
@@ -446,7 +529,9 @@ export class MarkdownStream {
 
     if (this.pendingHeader !== undefined) {
       const header = this.pendingHeader;
+      const skip = this.headerCommitted;
       this.pendingHeader = undefined;
+      this.headerCommitted = 0;
       if (isSeparator(line)) {
         const headerCells = splitRow(header);
         const aligns = parseAligns(line);
@@ -455,7 +540,9 @@ export class MarkdownStream {
           return [];
         }
       }
-      return [...this.paragraph(header), ...this.completeLine(line)];
+      // Not a table after all: the header is an ordinary line (heading, item, quote, paragraph).
+      const rows = this.block(header).slice(skip);
+      return [...rows, ...this.completeLine(line)];
     }
 
     const open = /^(\s{0,3})(`{3,}|~{3,})\s*([^\s`]*)/.exec(line);
@@ -466,8 +553,9 @@ export class MarkdownStream {
       return [...this.spaceBefore(), this.codeTop(lang)];
     }
 
-    if (looksLikeTableRow(line) && !/^\s*[-*+]\s/.test(line)) {
+    if (looksLikeTableRow(line) && !/^\s*([-*+]|\d{1,3}[.)])\s/.test(line) && !/^\s{0,3}(#{1,6}\s|>)/.test(line)) {
       this.pendingHeader = line;
+      this.headerCommitted = this.committed;
       return [];
     }
 
@@ -584,7 +672,9 @@ export class MarkdownStream {
     const finalRows = rows.length;
     const keep = TAIL_ROWS;
     let commit: string[] = [];
-    if (finalRows > keep + this.committed) {
+    // An unclosed span renders as literal markers now but as styled text once it closes, so rows
+    // are only final while nothing is open.
+    if (finalRows > keep + this.committed && !hasOpenSpan(text)) {
       const upTo = finalRows - keep;
       commit = rows.slice(this.committed, upTo);
       this.committed = upTo;

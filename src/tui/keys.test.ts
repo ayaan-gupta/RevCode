@@ -21,7 +21,10 @@ describe("KeyParser: text and control keys", () => {
     expect(names(parse("\r"))).toEqual(["return"]);
     expect(names(parse("\t"))).toEqual(["tab"]);
     expect(names(parse("\x7f"))).toEqual(["backspace"]);
-    expect(names(parse("\x1b"))).toEqual(["escape"]);
+    const parser = new KeyParser();
+    expect(parser.feed("\x1b")).toEqual([]); // might be the start of a sequence split across reads
+    expect(parser.hasPending).toBe(true);
+    expect(names(parser.flush())).toEqual(["escape"]);
   });
 
   it("parses ctrl+letter chords", () => {
@@ -96,9 +99,10 @@ describe("KeyParser: escape sequences", () => {
 });
 
 describe("KeyParser: chunking and paste", () => {
-  it("reassembles a CSI sequence split across chunks", () => {
-    expect(names(parse("\x1b", "[A"))).toEqual(["escape", "text"]); // lone ESC is Escape; "[A" is text
+  it("reassembles a CSI sequence split across chunks, including a lone ESC read on its own", () => {
+    expect(names(parse("\x1b", "[A"))).toEqual(["up"]);
     expect(names(parse("\x1b[1", ";5D"))).toEqual(["left"]);
+    expect(names(parse("\x1b", "b"))).toEqual(["b"]);
   });
 
   it("collects bracketed paste, including newlines", () => {
@@ -122,6 +126,24 @@ describe("KeyParser: chunking and paste", () => {
   it("keeps a trailing Enter after an un-bracketed paste as a real Enter", () => {
     const events = parse("first\rsecond\r");
     expect(events).toMatchObject([{ name: "paste", text: "first\nsecond" }, { name: "return" }]);
+  });
+
+  it("a flush in the middle of a paste does not abandon it", () => {
+    const parser = new KeyParser();
+    parser.feed("\x1b[200~some text\x1b");
+    expect(parser.inPaste).toBe(true);
+    expect(parser.flush()).toEqual([]);
+    const events = parser.feed("[201~");
+    expect(events).toMatchObject([{ name: "paste", text: "some text" }]);
+    expect(names(parser.feed("abc\x03\r"))).toEqual(["text", "c", "return"]);
+    expect(parser.inPaste).toBe(false);
+  });
+
+  it("ignores out-of-range code points instead of throwing", () => {
+    expect(() => parse("\x1b[1114112u")).not.toThrow();
+    expect(names(parse("\x1b[1114112u"))).toEqual(["response"]);
+    expect(names(parse("\x1b[27;2;99999999~"))).toEqual(["response"]);
+    expect(names(parse("\x1b[55296u"))).toEqual(["response"]); // lone surrogate
   });
 
   it("flush emits a pending lone escape", () => {
