@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="336" viewBox="0 0 900 336" role="img" aria-labelledby="t d">
+  <title id="t">Parallel Universes</title>
+  <desc id="d">The agent works in a private, checkpointed copy of your project and produces a receipt. You then land it, rewind it, fork it, replay it on another model, or compare universes.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L9,5 L0,9 z" fill="#71717a"/></marker>
+  </defs>
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#e4e4e7}
+    .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace}
+    .mut{fill:#a1a1aa}.sm{font-size:12px}.h{font-size:15px;font-weight:600}
+    .node{fill:#1f1f23;stroke:#3f3f46}
+  </style>
+  <rect x=".5" y=".5" width="899" height="335" rx="12" fill="#18181b" stroke="#3f3f46"/>
+
+  <!-- your project -->
+  <rect class="node" x="28" y="34" width="196" height="132" rx="10"/>
+  <path d="M48 66h14l4 5h26a3 3 0 0 1 3 3v22a3 3 0 0 1-3 3H48a3 3 0 0 1-3-3V69a3 3 0 0 1 3-3z" fill="none" stroke="#a1a1aa" stroke-width="1.5"/>
+  <text class="h" x="48" y="124">your project</text>
+  <text class="mut sm" x="48" y="144">untouched while the agent works</text>
+
+  <path d="M224 100h64" stroke="#71717a" stroke-width="1.5" marker-end="url(#a)"/>
+  <text class="mut sm" x="256" y="92" text-anchor="middle">copy</text>
+
+  <!-- universe -->
+  <rect class="node" x="292" y="34" width="330" height="132" rx="10" stroke="#fbbf24"/>
+  <text class="h" x="312" y="62" style="fill:#fbbf24">⌬ parallel universe</text>
+  <text class="mut sm" x="312" y="82">private copy · no permission prompts while it works</text>
+  <path d="M316 120H596" stroke="#52525b" stroke-width="2"/>
+  <path d="M412 120q18-24 42-24h110" fill="none" stroke="#f472b6" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <circle cx="564" cy="96" r="4" fill="#f472b6"/>
+  <g fill="#18181b" stroke="#a78bfa" stroke-width="2">
+    <circle cx="316" cy="120" r="5"/><circle cx="364" cy="120" r="5"/><circle cx="412" cy="120" r="5"/>
+    <circle cx="460" cy="120" r="5"/><circle cx="508" cy="120" r="5"/>
+  </g>
+  <circle cx="556" cy="120" r="5.5" fill="#67e8f9"/>
+  <text class="mut m" x="316" y="144" style="font-size:11px">checkpoint after every edit</text>
+  <text class="mut m" x="556" y="144" text-anchor="middle" style="font-size:11px">now</text>
+
+  <path d="M622 100h58" stroke="#71717a" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- receipt -->
+  <rect class="node" x="684" y="34" width="188" height="132" rx="10"/>
+  <text class="h" x="702" y="62">receipt</text>
+  <text class="mut sm" x="702" y="86">1 file changed (+6 −1)</text>
+  <text class="sm" x="702" y="108" style="fill:#4ade80">✔ last check passed</text>
+  <text class="mut sm m" x="702" y="128" style="font-size:11px">node --test → exit 0</text>
+  <text class="mut sm" x="702" y="152">verified after the last edit</text>
+
+  <!-- actions -->
+  <path d="M457 166v22M108 188H792M108 188v14M279 188v14M450 188v14M621 188v14M792 188v14" fill="none" stroke="#52525b" stroke-width="1.5"/>
+  <rect class="node" x="28" y="204" width="160" height="104" rx="10"/>
+  <text class="h m" x="44" y="232" style="fill:#4ade80">land</text>
+  <text class="mut sm" x="44" y="254">3-way merge into</text>
+  <text class="mut sm" x="44" y="272">your project; real</text>
+  <text class="mut sm" x="44" y="290">conflicts are kept</text>
+  <rect class="node" x="199" y="204" width="160" height="104" rx="10"/>
+  <text class="h m" x="215" y="232" style="fill:#67e8f9">rewind</text>
+  <text class="mut sm" x="215" y="254">files + conversation</text>
+  <text class="mut sm" x="215" y="272">back to any checkpoint</text>
+  <text class="mut sm" x="215" y="290">(undoable)</text>
+  <rect class="node" x="370" y="204" width="160" height="104" rx="10"/>
+  <text class="h m" x="386" y="232" style="fill:#a78bfa">fork</text>
+  <text class="mut sm" x="386" y="254">branch a sibling</text>
+  <text class="mut sm" x="386" y="272">universe from any</text>
+  <text class="mut sm" x="386" y="290">step, try another way</text>
+  <rect class="node" x="541" y="204" width="160" height="104" rx="10"/>
+  <text class="h m" x="557" y="232" style="fill:#f472b6">replay</text>
+  <text class="mut sm" x="557" y="254">same prompts, same</text>
+  <text class="mut sm" x="557" y="272">starting point, on</text>
+  <text class="mut sm" x="557" y="290">another model</text>
+  <rect class="node" x="712" y="204" width="160" height="104" rx="10"/>
+  <text class="h m" x="728" y="232" style="fill:#fbbf24">compare</text>
+  <text class="mut sm" x="728" y="254">side by side, with a</text>
+  <text class="mut sm" x="728" y="272">real pass/fail from</text>
+  <text class="mut sm" x="728" y="290">your verify command</text>
+</svg>

@@ -31,7 +31,47 @@ NAMED = {
     "brightcyan": (41, 184, 219), "brightwhite": (255, 255, 255),
 }
 
-def _color(c, default):
+FAINT = "~dim"
+
+
+class FaintScreen(pyte.Screen):
+    """pyte drops SGR 2 (faint); RevCode uses it for muted text. Track it as a suffix on the fg name."""
+
+    faint = False
+
+    def select_graphic_rendition(self, *attrs):
+        attrs = attrs or (0,)
+        kept, i = [], 0
+        while i < len(attrs):
+            a = attrs[i]
+            if a in (38, 48):  # extended color: keep its sub-parameters (a literal 2 there is not "faint")
+                n = 3 if i + 1 < len(attrs) and attrs[i + 1] == 5 else 5
+                kept.extend(attrs[i:i + n])
+                i += n
+                continue
+            if a in (0, 22):
+                self.faint = False
+            if a == 2:
+                self.faint = True
+            else:
+                kept.append(a)
+            i += 1
+        attrs = tuple(kept)
+        if attrs:
+            super().select_graphic_rendition(*attrs)
+        cur = self.cursor.attrs
+        fg = cur.fg[: -len(FAINT)] if cur.fg.endswith(FAINT) else cur.fg
+        if self.faint:
+            fg += FAINT
+        if fg != cur.fg:
+            self.cursor.attrs = cur._replace(fg=fg)
+
+
+def _color(c, default, bg=None):
+    if c.endswith(FAINT):
+        base = _color(c[: -len(FAINT)], default)
+        b = bg or DEFAULT_BG
+        return tuple(int(base[i] * 0.55 + b[i] * 0.45) for i in range(3))
     if c == "default":
         return default
     if c in NAMED:
@@ -46,7 +86,7 @@ def _color(c, default):
 class Session:
     def __init__(self, argv, cols=100, rows=30, env=None, cwd=None):
         self.cols, self.rows = cols, rows
-        self.screen = pyte.Screen(cols, rows)
+        self.screen = FaintScreen(cols, rows)
         self.stream = pyte.ByteStream(self.screen)
         self.raw = b""
         pid, fd = pty.fork()
@@ -111,8 +151,8 @@ class Session:
             line = self.screen.buffer[y]
             for x in range(self.cols):
                 c = line[x]
-                fg = _color(c.fg, DEFAULT_FG)
                 bg = _color(c.bg, DEFAULT_BG)
+                fg = _color(c.fg, DEFAULT_FG, bg)
                 if c.reverse:
                     fg, bg = bg, fg
                 if c.bg != "default" or c.reverse:

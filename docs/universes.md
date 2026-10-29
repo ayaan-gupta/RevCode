@@ -30,6 +30,27 @@ Permission prompts are the usual answer to "what if the agent does something dum
 - **Replay & compare.** `replay` forks from the base checkpoint and re-runs the recorded prompts with another model/profile; `compare --verify "<cmd>"` runs your command in both results and reports PASS/FAIL beside effort and file differences.
 - **Share.** `universes share` writes one self-contained HTML file (no external requests): prompts, every checkpoint with its diff, receipts, final changeset.
 
+## Commands
+
+```bash
+revcode --universe          # or: "universe": true in .revcode/config.json
+```
+
+The agent gets a private copy of your project (tracked + untracked files; dependency dirs like `node_modules` are symlinked for speed). Every mutating tool call is checkpointed into a shadow git repo, so the whole run is a timeline you can navigate:
+
+| In a session | From the shell | What it does |
+| --- | --- | --- |
+| `/diff [full]` | `revcode universes diff <id>` | changeset vs. your project |
+| `/land [paths] [--markers\|--theirs]` | `revcode universes land <id>` | apply it, with a **3-way merge** if you edited the project meanwhile; real conflicts are never overwritten |
+| `/checkpoints`, `/rewind <n>` | `revcode universes show <id>` | jump files **and conversation** back to any step (undoable) |
+| `/fork [n]` | `revcode universes fork <id> [n]` | branch a sibling universe |
+| — | `revcode universes replay <id> --model X` | re-run the same prompts from the same starting point on another model |
+| — | `revcode universes compare <a> <b> --verify "pytest -q"` | side-by-side effort, file differences, and a real pass/fail |
+| — | `revcode universes share <id>` | self-contained HTML replay of the run |
+| `/discard` | `revcode universes discard <id>` | throw it away |
+
+Every turn ends with a **receipt**: commands run with exit codes, files actually changed, whether anything was verified *after* the last change, and warnings such as "modified an existing test file".
+
 ## Guarantees
 
 - File tools in a universe are confined to the work copy (absolute paths and `..` are rejected).

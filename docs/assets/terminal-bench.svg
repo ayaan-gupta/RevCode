@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="268" viewBox="0 0 900 268" role="img" aria-labelledby="t d">
+  <title id="t">Terminal-Bench 2 result</title>
+  <desc id="d">RevCode with GLM-5.2 passed 54 of 87 Terminal-Bench 2 tasks (62.1%), one trial per task. On a 16-task sample the harness fixes took the same model from 9 to 14 passes.</desc>
+  <defs>
+    <linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#67e8f9"/><stop offset=".5" stop-color="#a78bfa"/><stop offset="1" stop-color="#f472b6"/></linearGradient>
+  </defs>
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#e4e4e7}
+    .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace}
+    .mut{fill:#a1a1aa}.sm{font-size:12px}.h{font-size:13px;font-weight:600}
+  </style>
+  <rect x=".5" y=".5" width="899" height="267" rx="12" fill="#18181b" stroke="#3f3f46"/>
+  <text class="mut sm" x="28" y="36" style="letter-spacing:.08em;font-weight:600">TERMINAL-BENCH 2 · GLM-5.2 · ONE TRIAL PER TASK</text>
+  <text x="28" y="108" style="font-size:64px;font-weight:700;fill:url(#g);letter-spacing:-.02em">62.1%</text>
+  <text x="222" y="86" class="h" style="font-size:16px">54 of 87 tasks</text>
+  <text x="222" y="106" class="mut sm">no per-task tuning, no AGENTS.md,</text>
+  <text x="222" y="122" class="mut sm">hooks or MCP; standard error ≈ ±5 pts</text>
+  <rect x="28.0" y="142" width="247.0" height="12" rx="3" fill="#4ade80"/>
+  <rect x="277.0" y="142" width="100.6" height="12" rx="3" fill="#6b7280"/>
+  <rect x="379.7" y="142" width="45.7" height="12" rx="3" fill="#4b5563"/>
+  <rect x="427.4" y="142" width="4.6" height="12" rx="3" fill="#a1a1aa"/>
+  <rect x="28" y="175" width="10" height="10" rx="2" fill="#4ade80"/>
+  <text class="sm" x="44" y="184"><tspan style="font-weight:600">54</tspan> <tspan class="mut" style="fill:#a1a1aa">passed</tspan></text>
+  <rect x="232" y="175" width="10" height="10" rx="2" fill="#6b7280"/>
+  <text class="sm" x="248" y="184"><tspan style="font-weight:600">22</tspan> <tspan class="mut" style="fill:#a1a1aa">wrong result</tspan></text>
+  <rect x="28" y="199" width="10" height="10" rx="2" fill="#4b5563"/>
+  <text class="sm" x="44" y="208"><tspan style="font-weight:600">10</tspan> <tspan class="mut" style="fill:#a1a1aa">out of time</tspan></text>
+  <rect x="232" y="199" width="10" height="10" rx="2" fill="#a1a1aa"/>
+  <text class="sm" x="248" y="208"><tspan style="font-weight:600">1</tspan> <tspan class="mut" style="fill:#a1a1aa">verifier hung</tspan></text>
+  <text class="mut sm" x="28" y="246" style="font-size:11.5px">Measured as-is; details and caveats in docs/terminal-bench.md</text>
+  <path d="M470 28V240" stroke="#27272a"/>
+  <text class="mut sm" x="496" y="36" style="letter-spacing:.08em;font-weight:600">WHAT THE HARNESS FIXES BOUGHT</text>
+  <text class="mut sm" x="496" y="54" style="font-size:11.5px">same model, seeded 16-task sample</text>
+  <text class="sm" x="496" y="84">before the fixes</text>
+  <rect x="496" y="94" width="300" height="10" rx="3" fill="#27272a"/>
+  <rect x="496" y="94" width="168.8" height="10" rx="3" fill="#67e8f9"/>
+  <text class="m" x="808" y="104" style="font-size:13px;font-weight:600">9/16</text>
+  <text class="sm" x="496" y="136">+ streaming, retry, hard deadline</text>
+  <rect x="496" y="146" width="300" height="10" rx="3" fill="#27272a"/>
+  <rect x="496" y="146" width="243.8" height="10" rx="3" fill="#67e8f9"/>
+  <text class="m" x="808" y="156" style="font-size:13px;font-weight:600">13/16</text>
+  <text class="sm" x="496" y="188">+ thinking off</text>
+  <rect x="496" y="198" width="300" height="10" rx="3" fill="#27272a"/>
+  <rect x="496" y="198" width="262.5" height="10" rx="3" fill="#67e8f9"/>
+  <text class="m" x="808" y="208" style="font-size:13px;font-weight:600">14/16</text>
+  <text class="mut sm" x="496" y="246" style="font-size:11.5px">n = 16, one trial each: directional, not significant</text>
+</svg>

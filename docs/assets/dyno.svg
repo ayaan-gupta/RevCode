@@ -1,0 +1,60 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="312" viewBox="0 0 900 312" role="img" aria-labelledby="t d">
+  <title id="t">Dyno</title>
+  <desc id="d">Dyno tunes the harness for your model in three steps: baseline, one-knob-at-a-time search, and a confirmation against a fresh baseline. It keeps a profile only if the gain holds up.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L9,5 L0,9 z" fill="#71717a"/></marker>
+  </defs>
+  <style>
+    text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;fill:#e4e4e7}
+    .m{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"DejaVu Sans Mono",monospace}
+    .mut{fill:#a1a1aa}.sm{font-size:12px}.h{font-size:15px;font-weight:600}
+    .node{fill:#1f1f23;stroke:#3f3f46}
+  </style>
+  <rect x=".5" y=".5" width="899" height="311" rx="12" fill="#18181b" stroke="#3f3f46"/>
+  <rect class="node" x="28" y="28" width="250" height="118" rx="10"/>
+  <circle cx="56" cy="56" r="11" fill="none" stroke="#67e8f9" stroke-width="2"/>
+  <text x="56" y="60.5" text-anchor="middle" class="m" style="font-size:12px;font-weight:700;fill:#67e8f9">1</text>
+  <text class="h" x="78" y="61">baseline</text>
+  <text class="mut sm" x="46" y="88">default profile on the full suite;</text>
+  <text class="mut sm" x="46" y="106">stops right here if the model</text>
+  <text class="mut sm" x="46" y="124">already passes ≥ 95%</text>
+  <path d="M278 87h43" stroke="#71717a" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect class="node" x="325" y="28" width="250" height="118" rx="10"/>
+  <circle cx="353" cy="56" r="11" fill="none" stroke="#a78bfa" stroke-width="2"/>
+  <text x="353" y="60.5" text-anchor="middle" class="m" style="font-size:12px;font-weight:700;fill:#a78bfa">2</text>
+  <text class="h" x="375" y="61">search</text>
+  <text class="mut sm" x="343" y="88">one knob at a time, on the tasks</text>
+  <text class="mut sm" x="343" y="106">it failed plus a few that passed</text>
+  <text class="mut sm" x="343" y="124">(a regression guard)</text>
+  <path d="M575 87h43" stroke="#71717a" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect class="node" x="622" y="28" width="250" height="118" rx="10"/>
+  <circle cx="650" cy="56" r="11" fill="none" stroke="#f472b6" stroke-width="2"/>
+  <text x="650" y="60.5" text-anchor="middle" class="m" style="font-size:12px;font-weight:700;fill:#f472b6">3</text>
+  <text class="h" x="672" y="61">confirm</text>
+  <text class="mut sm" x="640" y="88">winner and baseline re-run fresh,</text>
+  <text class="mut sm" x="640" y="106">side by side; an exact sign test</text>
+  <text class="mut sm" x="640" y="124">says whether the gain is real</text>
+  <path d="M747 146v14M747 160H235M235 160v10M747 160H665M665 160v10" fill="none" stroke="#52525b" stroke-width="1.5"/>
+  <rect class="node" x="28" y="170" width="414" height="52" rx="10" stroke="#166534"/>
+  <text class="sm" x="46" y="192" style="fill:#4ade80;font-weight:600">✔ better, and it holds up</text>
+  <text class="mut sm" x="46" y="210">saved as that model’s profile and loaded automatically</text>
+  <rect class="node" x="458" y="170" width="414" height="52" rx="10"/>
+  <text class="sm" x="476" y="192" style="font-weight:600">✘ nothing holds up</text>
+  <text class="mut sm" x="476" y="210">keeps the defaults — and tells you so</text>
+  <text class="mut sm" x="28" y="268">What it tunes</text>
+  <rect x="120" y="251" width="76" height="26" rx="13" fill="#27272a" stroke="#3f3f46"/>
+  <text class="m" x="158" y="268" text-anchor="middle" style="font-size:11.5px">editMode</text>
+  <rect x="204" y="251" width="96" height="26" rx="13" fill="#27272a" stroke="#3f3f46"/>
+  <text class="m" x="251" y="268" text-anchor="middle" style="font-size:11.5px">promptStyle</text>
+  <rect x="307" y="251" width="89" height="26" rx="13" fill="#27272a" stroke="#3f3f46"/>
+  <text class="m" x="352" y="268" text-anchor="middle" style="font-size:11.5px">toolSchema</text>
+  <rect x="404" y="251" width="109" height="26" rx="13" fill="#27272a" stroke="#3f3f46"/>
+  <text class="m" x="459" y="268" text-anchor="middle" style="font-size:11.5px">parallelTools</text>
+  <rect x="521" y="251" width="89" height="26" rx="13" fill="#27272a" stroke="#3f3f46"/>
+  <text class="m" x="566" y="268" text-anchor="middle" style="font-size:11.5px">verifyGate</text>
+  <rect x="618" y="251" width="116" height="26" rx="13" fill="#27272a" stroke="#3f3f46"/>
+  <text class="m" x="676" y="268" text-anchor="middle" style="font-size:11.5px">completionGate</text>
+  <rect x="742" y="251" width="96" height="26" rx="13" fill="#27272a" stroke="#3f3f46"/>
+  <text class="m" x="790" y="268" text-anchor="middle" style="font-size:11.5px">temperature</text>
+  <text class="mut sm" x="28" y="297" style="font-size:11.5px">The same model can swing 10+ points on a benchmark with nothing but the harness changed.</text>
+</svg>
