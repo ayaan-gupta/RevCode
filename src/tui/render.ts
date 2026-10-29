@@ -304,7 +304,7 @@ export class TerminalRenderer {
     const rule = (text: string): string => style.dim(text);
     const [tl, , bl] = style.glyphs.corner;
     const title = " receipt ";
-    const rows = [rule(`${tl}${style.glyphs.rule}${title}${style.glyphs.rule.repeat(Math.max(4, width - title.length - 3))}`)];
+    const rows = [rule(`${tl}${style.glyphs.rule}${title}${style.glyphs.rule.repeat(Math.max(4, width - title.length - 2))}`)];
     for (const line of lines) {
       const clean = sanitizeForDisplay(line);
       const body = clean.startsWith("⚠") || clean.startsWith("!") ? style.paint("warn", clean) : clean.startsWith("✘") ? style.paint("error", clean) : clean.startsWith("✔") ? style.paint("ok", clean) : style.dim(clean);

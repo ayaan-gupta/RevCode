@@ -9,7 +9,7 @@ import type { CliArgs } from "../cli.js";
 import { compareUniverses, formatComparison } from "../universe/compare.js";
 import { renderUniverseHtml } from "../universe/export-html.js";
 import { replayUniverse } from "../universe/replay.js";
-import { describeUniverse, formatChangeSummary, formatCheckpoints, formatUniverseList, landFlow } from "../universe/ui.js";
+import { describeUniverse, formatChangeSummary, formatCheckpoints, formatUniverseList, landFlow, landOutcome } from "../universe/ui.js";
 import { Universe, type UniverseMeta } from "../universe/universe.js";
 
 export async function runUniversesCommand(args: CliArgs, action: string, rest: string[]): Promise<number> {
@@ -51,8 +51,7 @@ export async function runUniversesCommand(args: CliArgs, action: string, rest: s
             return flags.has("--yes") || flags.has("-y") || (await askYesNo(`Apply these changes to ${u.meta.projectRoot}?`));
           },
         });
-        const printed = result.landed ? result.lines.slice(result.lines.findIndex((l) => l.startsWith("Landed"))) : result.lines.filter((l) => !l.startsWith("  ") && !l.startsWith("Landing"));
-        console.log(printed.join("\n"));
+        console.log(landOutcome(result).join("\n"));
         return 0;
       }
       case "discard": {

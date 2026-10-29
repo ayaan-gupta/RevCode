@@ -41,6 +41,7 @@ import {
   formatChangeSummary,
   formatUniverseList,
   landFlow,
+  landOutcome,
 } from "../universe/ui.js";
 import { Universe } from "../universe/universe.js";
 import { VERSION } from "../version.js";
@@ -819,7 +820,7 @@ export class Agent {
             return confirmYesNo(this.renderer, `Apply these changes to ${universe.meta.projectRoot}?`);
           },
         });
-        this.renderer.info(flow.lines.filter((l) => !flow.landed || !l.startsWith("  ") || l.includes("Landed")).join("\n"));
+        this.renderer.info(landOutcome(flow).join("\n"));
         return;
       }
       case "/rewind": {

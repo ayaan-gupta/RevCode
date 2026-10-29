@@ -21,7 +21,7 @@ afterEach(() => {
 });
 
 describe("classifiers", () => {
-  it.each(["pytest -x", "python3 -m pytest", "npm test", "npm run build", "cargo test", "make", "python3 app.py", "./run.sh", "curl localhost:8080", "tsc --noEmit"])(
+  it.each(["pytest -x", "python3 -m pytest", "npm test", "npm run build", "cargo test", "make", "python3 app.py", "./run.sh", "curl localhost:8080", "tsc --noEmit", "node --test", "node --experimental-strip-types --test src/", "deno test"])(
     "treats %s as verification",
     (cmd) => expect(isVerificationCommand(cmd)).toBe(true),
   );

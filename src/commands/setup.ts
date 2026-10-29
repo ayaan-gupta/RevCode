@@ -34,10 +34,11 @@ const CHOICES: ProviderChoice[] = [
 ];
 
 /** What is missing for the provider this run would use, or undefined when it is ready. */
-export function missingCredentials(args: Pick<CliArgs, "provider" | "model">): { provider: string; message: string } | undefined {
+export function missingCredentials(args: Pick<CliArgs, "provider" | "model" | "baseUrl">): { provider: string; message: string } | undefined {
   const provider = resolveProvider(args.provider, args.model);
   const vars = providerKeyVars(provider);
   if (!vars) return undefined;
+  if (provider === "openai-compat" && args.baseUrl) return undefined; // `--base-url` is the server
   if (vars.some((name) => (process.env[name] ?? "").trim().length > 0)) return undefined;
   return { provider, message: provider === "openai-compat" ? "No server configured (REVCODE_BASE_URL)." : `No API key found for ${provider}.` };
 }

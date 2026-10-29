@@ -95,6 +95,7 @@ describe("TerminalRenderer: transcript layout", () => {
     expect(rows[0]).toMatch(/^ {2}╭─ receipt ─+/);
     expect(rows.some((l) => l.includes("│ ⚠ files changed"))).toBe(true);
     expect(rows.at(-1)).toMatch(/^ {2}╰─+/);
+    expect(rows.at(-1)?.length).toBe(rows[0]?.length); // top and bottom rules end together
     expect(rows.every((l) => l.length <= 62)).toBe(true);
   });
 

@@ -2,7 +2,7 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { formatCheckpoints, formatChangeSummary, formatUniverseList, landFlow } from "./ui.js";
+import { formatCheckpoints, formatChangeSummary, formatUniverseList, landFlow, landOutcome } from "./ui.js";
 import { Universe } from "./universe.js";
 
 let previousHome: string | undefined;
@@ -42,10 +42,13 @@ describe("universe ui", () => {
     const cancelled = await landFlow(u, { confirm: async () => false });
     expect(cancelled.landed).toBe(false);
     expect(cancelled.lines.join("\n")).toContain("Cancelled.");
+    expect(landOutcome(cancelled)).toEqual(["Cancelled."]);
 
     const landed = await landFlow(u, { confirm: async () => true });
     expect(landed.landed).toBe(true);
     expect(landed.lines.join("\n")).toContain("Landed: 1 written");
+    // the plan was already shown while confirming, so only the outcome is printed afterwards
+    expect(landOutcome(landed)).toEqual([expect.stringContaining("Landed: 1 written")]);
 
     const again = await landFlow(u, { confirm: async () => true });
     expect(again.landed).toBe(false);

@@ -63,6 +63,8 @@ const VERIFY_PATTERNS: RegExp[] = [
   /\b(?:ctest|rspec|phpunit|bats|prove)\b/,
   /\bpython3?\s+\S+\.py\b/,
   /\bnode\s+\S+\.(?:m?js|cjs)\b/,
+  /\bnode\s+(?:-\S+\s+)*--test\b/,
+  /\bdeno\s+(?:test|check|lint)\b/,
   /\b(?:bash|sh)\s+\S+\.sh\b/,
   /(?:^|[;&|]\s*)\.\/\S+/,
   /\bcurl\b/,

@@ -29,6 +29,8 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { forChildShell } from "../net/env-proxy.js";
+
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_TIMEOUT_MS = 600_000;
 const MAX_OUTPUT_CHARS = 20_000;
@@ -94,7 +96,7 @@ export class ShellSession {
 
   constructor(options: ShellSessionOptions) {
     this.cwd = path.resolve(options.cwd);
-    this.env = options.env ?? process.env;
+    this.env = forChildShell(options.env ?? process.env);
   }
 
   /** Run a command, serialized behind any in-flight command. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nodeSupportsEnvProxy, shouldReexecForProxy } from "./env-proxy.js";
+import { forChildShell, nodeSupportsEnvProxy, shouldReexecForProxy } from "./env-proxy.js";
 
 describe("nodeSupportsEnvProxy", () => {
   it("knows which Node releases have NODE_USE_ENV_PROXY", () => {
@@ -25,5 +25,17 @@ describe("shouldReexecForProxy", () => {
     expect(shouldReexecForProxy(proxied, "20.18.0")).toBe(false);
     expect(shouldReexecForProxy({ ...proxied, NODE_USE_ENV_PROXY: "1" }, "22.22.0")).toBe(false);
     expect(shouldReexecForProxy({ ...proxied, REVCODE_NO_PROXY_REEXEC: "1" }, "22.22.0")).toBe(false);
+  });
+});
+
+describe("forChildShell", () => {
+  it("drops the flag RevCode added when it re-launched itself", () => {
+    const env = { PATH: "/bin", NODE_USE_ENV_PROXY: "1", REVCODE_PROXY_REEXEC: "1" };
+    expect(forChildShell(env)).toEqual({ PATH: "/bin" });
+  });
+
+  it("keeps a flag the user set themselves", () => {
+    const env = { PATH: "/bin", NODE_USE_ENV_PROXY: "1" };
+    expect(forChildShell(env)).toBe(env);
   });
 });

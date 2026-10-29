@@ -12,6 +12,20 @@ import { spawn } from "node:child_process";
 
 const PROXY_VARS = ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"];
 
+/** Set on the re-launched process so child shells can drop the flag again (see `forChildShell`). */
+const REEXEC_MARKER = "REVCODE_PROXY_REEXEC";
+
+/**
+ * The environment for commands the agent runs. When RevCode itself added `NODE_USE_ENV_PROXY=1` it
+ * is removed again: otherwise every `node` the agent starts prints an "EnvHttpProxyAgent is
+ * experimental" warning that pollutes test output.
+ */
+export function forChildShell(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  if (!env[REEXEC_MARKER]) return env;
+  const { NODE_USE_ENV_PROXY: _flag, [REEXEC_MARKER]: _marker, ...rest } = env;
+  return rest;
+}
+
 /** `NODE_USE_ENV_PROXY` landed in Node 24.0 and was backported to 22.21. */
 export function nodeSupportsEnvProxy(version: string): boolean {
   const [major = 0, minor = 0] = version.split(".").map((part) => Number.parseInt(part, 10));
@@ -39,7 +53,7 @@ export function reexecWithEnvProxy(): Promise<number | undefined> {
     const child = spawn(
       process.execPath,
       [...process.execArgv, "--disable-warning=UNDICI-EHPA", ...process.argv.slice(1)],
-      { stdio: "inherit", env: { ...process.env, NODE_USE_ENV_PROXY: "1" } },
+      { stdio: "inherit", env: { ...process.env, NODE_USE_ENV_PROXY: "1", [REEXEC_MARKER]: "1" } },
     );
 
     // Ctrl-C reaches the whole foreground process group, so on a terminal the

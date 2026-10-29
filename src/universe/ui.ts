@@ -97,6 +97,12 @@ export interface LandFlowResult {
   landed: boolean;
 }
 
+/** What to print once `confirm` has already shown the plan, so the plan isn't printed twice. */
+export function landOutcome(result: LandFlowResult): string[] {
+  if (result.landed) return result.lines.slice(Math.max(0, result.lines.findIndex((l) => l.startsWith("Landed"))));
+  return result.lines.filter((l) => !l.startsWith("  ") && !l.startsWith("Landing"));
+}
+
 /** Plan → show → confirm → apply. Shared by `/land` and `revcode universes land`. */
 export async function landFlow(universe: Universe, options: LandFlowOptions): Promise<LandFlowResult> {
   const plan = await planLand(universe, { paths: options.paths });
