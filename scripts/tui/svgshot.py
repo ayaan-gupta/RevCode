@@ -193,8 +193,12 @@ def _row_markup(row, cols, ox=0, default_bg=DEFAULT_BG):
     return "".join(backs) + "".join(lines) + "".join(shapes)
 
 
-def render_svg(frames, *, title="revcode", durations=None, last_hold=4.0, chrome=True, rows=None, cols=None, background=True, pad=16, first_row=0):
-    """One <svg>. With several frames, plays them in a loop (the last one is held for `last_hold` s)."""
+def render_svg(frames, *, title="revcode", durations=None, last_hold=4.0, chrome=True, rows=None, cols=None, background=True, pad=16, first_row=0, backdrop=False):
+    """One <svg>. With several frames, plays them in a loop (the last one is held for `last_hold` s).
+
+    Without CSS animation (or with reduced motion) the first frame shows, so it doubles as the poster.
+    `backdrop` floats the window on a soft gradient panel, like a product screenshot.
+    """
     cols = cols or len(frames[0].rows[0])
     rows = rows or max(f.last_row() for f in frames) + 1
     rows = rows - first_row
@@ -202,8 +206,9 @@ def render_svg(frames, *, title="revcode", durations=None, last_hold=4.0, chrome
     width = cols * CW + 2 * pad
     height = top + rows * CH + 2 * pad
     ox, oy = pad, top + pad
+    margin = 48 if backdrop else 0
     parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" '
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width + 2 * margin}" height="{height + 2 * margin}" viewBox="0 0 {width + 2 * margin} {height + 2 * margin}" '
         f'font-family="{FONT}" font-size="{FONT_SIZE}" role="img" aria-label="{escape(title)} terminal session">'
     ]
     n = len(frames)
@@ -211,7 +216,7 @@ def render_svg(frames, *, title="revcode", durations=None, last_hold=4.0, chrome
     durations[-1] = max(durations[-1], last_hold) if n > 1 else durations[-1]
     total = sum(durations)
     if n > 1:
-        css = [".f{opacity:0;animation-duration:%.2fs;animation-iteration-count:infinite;animation-timing-function:step-end}" % total]
+        css = [".f{opacity:0;animation-duration:%.2fs;animation-iteration-count:infinite;animation-timing-function:step-end}.f0{opacity:1}" % total]
         t = 0.0
         for i, d in enumerate(durations):
             a, b = 100 * t / total, 100 * (t + d) / total
@@ -224,11 +229,24 @@ def render_svg(frames, *, title="revcode", durations=None, last_hold=4.0, chrome
             if b < 100:
                 stops.append(f"{b:.3f}%{{opacity:0}}")
             css.append(f"@keyframes k{i}{{{''.join(stops)}}}")
-        css.append("@media (prefers-reduced-motion:reduce){.f{animation:none}.fl{opacity:1}}")
+        css.append("@media (prefers-reduced-motion:reduce){.f{animation:none}}")
         parts.append("<style>" + "".join(css) + "</style>")
+    if backdrop:
+        w, h = width + 2 * margin, height + 2 * margin
+        parts.append(
+            '<defs>'
+            '<radialGradient id="glow1" cx="0.12" cy="0.1" r="0.7"><stop offset="0" stop-color="#22d3ee" stop-opacity=".55"/><stop offset="1" stop-color="#22d3ee" stop-opacity="0"/></radialGradient>'
+            '<radialGradient id="glow2" cx="0.92" cy="0.95" r="0.75"><stop offset="0" stop-color="#f472b6" stop-opacity=".5"/><stop offset="1" stop-color="#f472b6" stop-opacity="0"/></radialGradient>'
+            '<radialGradient id="glow3" cx="0.55" cy="0.45" r="0.6"><stop offset="0" stop-color="#8b5cf6" stop-opacity=".35"/><stop offset="1" stop-color="#8b5cf6" stop-opacity="0"/></radialGradient>'
+            '<filter id="shadow" x="-15%" y="-15%" width="130%" height="140%"><feDropShadow dx="0" dy="22" stdDeviation="22" flood-color="#000" flood-opacity=".55"/></filter>'
+            '</defs>'
+            f'<rect width="{w}" height="{h}" rx="18" fill="#0c0a1a"/>'
+            f'<rect width="{w}" height="{h}" rx="18" fill="url(#glow1)"/><rect width="{w}" height="{h}" rx="18" fill="url(#glow2)"/><rect width="{w}" height="{h}" rx="18" fill="url(#glow3)"/>'
+            f'<g transform="translate({margin} {margin})">'
+        )
     if background:
         if chrome:
-            parts.append(f'<rect x="0.5" y="0.5" width="{width - 1}" height="{height - 1}" rx="10" fill="{_hex(DEFAULT_BG)}" stroke="#3f3f46"/>')
+            parts.append(f'<rect x="0.5" y="0.5" width="{width - 1}" height="{height - 1}" rx="10" fill="{_hex(DEFAULT_BG)}" stroke="#3f3f46"' + (' filter="url(#shadow)"' if backdrop else "") + '/>')
             parts.append(f'<path d="M0.5,{top} L{width - 0.5},{top}" stroke="#27272a"/>')
             for i, color in enumerate(("#ff5f56", "#ffbd2e", "#27c93f")):
                 parts.append(f'<circle cx="{22 + i * 20}" cy="{top // 2}" r="6" fill="{color}"/>')
@@ -256,11 +274,13 @@ def render_svg(frames, *, title="revcode", durations=None, last_hold=4.0, chrome
                 uses.append(f'<rect x="{ox + cx * CW}" y="{oy + cy * CH}" width="{CW}" height="{CH}" fill="#e4e4e7" fill-opacity="0.85"/>')
         body = "".join(uses)
         if n > 1:
-            cls = f"f f{i}" + (" fl" if i == n - 1 else "")
+            cls = f"f f{i}"
             groups.append(f'<g class="{cls}">{body}</g>')
         else:
             groups.append(f"<g>{body}</g>")
     parts.append("<defs>" + "".join(defs) + "</defs>")
     parts.extend(groups)
+    if backdrop:
+        parts.append("</g>")
     parts.append("</svg>")
     return "".join(parts)

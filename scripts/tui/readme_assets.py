@@ -138,7 +138,7 @@ def pick(tape):
     confirm = first(tape, lambda t: "Apply these changes" in t, receipt)
     landed = first(tape, lambda t: "Landed:" in t, confirm)
     return [
-        (first(tape, lambda t: "Ask RevCode" in t), 1.8),
+        (first(tape, lambda t: "Ask RevCode" in t), 2.6),
         (typing[len(typing) // 3], 0.5),
         (typing[2 * len(typing) // 3], 0.5),
         (typed, 0.9),
@@ -155,7 +155,7 @@ def render(tape, out):
     os.makedirs(out, exist_ok=True)
     chosen = pick(tape)
     frames = [tape[i][2] for i, _ in chosen]
-    svg = render_svg(frames, title="revcode", durations=[d for _, d in chosen], rows=ROWS)
+    svg = render_svg(frames, title="revcode", durations=[d for _, d in chosen], rows=ROWS, backdrop=True)
     with open(os.path.join(out, "hero.svg"), "w") as f:
         f.write(svg)
     for theme in ("dark", "light"):
