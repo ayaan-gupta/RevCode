@@ -6,11 +6,11 @@
   </picture>
 </p>
 
-<h3 align="center">The coding agent that works on a copy of your project.</h3>
+<h3 align="center">Let it run. Keep what works.</h3>
 
 <p align="center">
-  Your files don't change while it works, so it never has to stop and ask for permission.<br>
-  When it's done, you see exactly what it changed and what it ran, then apply it or throw it away.
+  RevCode never stops to ask permission, because nothing it does touches your files until you say so.<br>
+  Every edit and command can be undone, and <code>revcode race</code> tries three times at once and keeps the one that passes your tests.
 </p>
 
 <p align="center">
@@ -40,13 +40,27 @@ Needs Node 20+, `git`, `ripgrep` and `bash` on Linux or macOS.
 
 <p align="center"><img src="docs/assets/universes.svg" alt="Your project stays as it is. RevCode works in a private copy, saving a checkpoint after every edit, and reports what it did. Then you apply the changes, go back, try another approach, re-run with another model, or throw it away." width="860"></p>
 
-Start `revcode` in a git project and it copies the project into a private workspace (a *universe*) and works there. The copy has your git history too, so `git log` and `git diff` work as usual.
+Run `revcode` in a git project. It builds a *universe*: a recorded copy of your project, uncommitted edits included, with your full git history inside.
 
-1. **It works without interruptions.** It edits files and runs commands on the copy, so there is nothing to approve. It still asks before anything that reaches outside the copy, like `git push`, deploying or `sudo`. Every edit is saved as a checkpoint.
-2. **It shows what it did.** Each answer ends with the commands that actually ran and their results, the files that changed, and whether the tests ran after the last edit.
-3. **You decide what happens.** `/land` applies the changes to your project, merging with anything you edited in the meantime. `/rewind 3` goes back to checkpoint 3. `/discard` throws everything away. If you quit with changes still in the copy, RevCode asks what to do with them.
+1. **It never asks.** It edits and runs commands in the universe, so there is nothing to approve. Only actions that reach past it, like `git push`, deploying or `sudo`, still ask.
+2. **It records everything.** Every edit and command is a checkpoint. `/rewind 3` puts the files *and* the conversation back to step 3.
+3. **You keep what works.** `/land` merges the result into your project, around anything you changed meanwhile. Conflicting edits are never overwritten.
 
-You can keep editing your files while it works: before each answer, RevCode brings your edits into the copy. Outside a git project, or with `--no-universe`, it works in the folder directly and asks before each change, like other agents.
+Keep coding while it works: your edits flow into the universe before each answer. Outside a git project, or with `--no-universe`, RevCode works in the folder directly and asks first, like other agents.
+
+## Why not just a git worktree?
+
+A worktree gives an agent a separate folder. A universe gives it a separate folder that also remembers, merges and races.
+
+| | git worktree | RevCode universe |
+| --- | --- | --- |
+| Starts from | your last commit | your files right now: uncommitted edits, `.env` and dependencies included |
+| Undo | the commits you remember to make | every edit and command, files and conversation together |
+| Your edits while it works | it never sees them | brought in before each answer |
+| Getting the result back | commit, merge, resolve | `/land`: a 3-way merge into your working files |
+| Your repository | shares its branches and refs | read, never written |
+| Several attempts | one worktree each, set up by hand | `revcode race`: three at once, tested, best one picked |
+| Setup | `git worktree add`, reinstall dependencies | none, it's the default |
 
 ## Race
 
@@ -56,7 +70,7 @@ You can keep editing your files while it works: before each answer, RevCode brin
 
 ## Features
 
-- **Undo any step.** Go back to any checkpoint, files and conversation together, or branch off from one and try a different approach.
+- **Branch off any step.** `/fork 4` starts a second universe from checkpoint 4 to try a different approach.
 - **Apply only if the tests pass.** `revcode run "upgrade lodash" --land-if "npm test"` works on a copy and changes your project only if the check passes. Made for scripts, cron jobs and CI.
 - **A spending cap.** Every answer shows what it cost. `--max-cost 2` stops before a session spends more than $2; `/cost 5` sets one mid-session.
 - **Try another model on the same task.** `revcode universes replay <id> --model claude-sonnet-5-5` re-runs your prompts from the same starting point, and `revcode universes compare` runs your tests on both results.
