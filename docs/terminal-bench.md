@@ -1,5 +1,7 @@
 # Terminal-Bench notes
 
+<p align="center"><img src="assets/terminal-bench.svg" alt="Terminal-Bench 2 with GLM-5.2: 54 of 87 tasks passed (62.1%), one trial per task." width="860"></p>
+
 ## What changed (harness-level, from studying Terminus-2, Codex, OpenCode, oh-my-pi, deepagents and others)
 
 Defects found and fixed in RevCode itself:
