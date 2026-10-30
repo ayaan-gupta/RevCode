@@ -30,7 +30,7 @@ import path from "node:path";
 import { revcodeHome, safeSegment, universesDir } from "../config/paths.js";
 import { copyProject, DEFAULT_EXCLUDES, type CopyOptions } from "./copy.js";
 import { gitText, runPlainGit, runShadowGit, shadowHandle, type ShadowGitHandle } from "./git.js";
-import { mirrorProjectGit } from "./project-git.js";
+import { gitHead, mirrorProjectGit } from "./project-git.js";
 
 export type UniverseStatus = "active" | "landed" | "discarded";
 
@@ -52,6 +52,8 @@ export interface UniverseMeta {
   skippedLarge: string[];
   /** The copy has its own git repository mirroring the project's history. */
   projectGit?: boolean;
+  /** The project's HEAD when the mirror was last brought up to date. */
+  projectHead?: string;
   landedCount: number;
   lastLandedAt?: string;
 }
@@ -79,6 +81,8 @@ export interface Checkpoint {
   messageCount?: number;
   turn?: number;
   exitCode?: number | null;
+  /** The land starting point at the time (it moves after a land or when your edits are brought in). */
+  base?: string;
 }
 
 export interface PromptRecord {
@@ -164,6 +168,7 @@ export class Universe {
         linked: copied.linked,
         skippedLarge: copied.skippedLarge,
         projectGit,
+        projectHead: projectGit ? await gitHead(projectRoot) : undefined,
         landedCount: 0,
       };
       const universe = new Universe(meta, dir);
@@ -249,6 +254,7 @@ export class Universe {
       messageCount: info.messageCount,
       turn: info.turn,
       exitCode: info.exitCode,
+      ...(this.meta.baseSha ? { base: this.meta.baseSha } : {}),
     };
     this.appendTimeline(checkpoint);
     return checkpoint;
@@ -314,6 +320,13 @@ export class Universe {
       await this.checkpointLocked({ kind: "tool", summary: `state before rewind to #${n}` });
       await runShadowGit(this.handle, ["reset", "--hard", "-q", target.sha]);
       await runShadowGit(this.handle, ["clean", "-fdq"]);
+      // Files are as they were at #n, so the land starting point must be too: otherwise your own
+      // edits brought in after #n would look like changes to undo.
+      const base = startingPointOf(target);
+      if (base && base !== this.meta.baseSha) {
+        this.meta.baseSha = base;
+        this.saveMeta();
+      }
       return this.checkpointLocked({
         kind: "rewind",
         summary: `rewound to #${n} (${target.summary})`,
@@ -355,6 +368,7 @@ export class Universe {
       const meta: UniverseMeta = {
         ...this.meta,
         id,
+        baseSha: (sourceCheckpoint && startingPointOf(sourceCheckpoint)) ?? this.meta.baseSha,
         name: options.name ?? (this.meta.name ? `${this.meta.name} (fork)` : undefined),
         createdAt: now,
         updatedAt: now,
@@ -362,6 +376,7 @@ export class Universe {
         parentId: this.id,
         forkedFromSha: source,
         projectGit,
+        projectHead: projectGit ? await gitHead(this.meta.projectRoot) : undefined,
         landedCount: 0,
         lastLandedAt: undefined,
       };
@@ -521,6 +536,11 @@ export class Universe {
 }
 
 // --- helpers ------------------------------------------------------------------
+
+/** The land starting point in effect at a checkpoint. */
+function startingPointOf(checkpoint: Checkpoint): string | undefined {
+  return checkpoint.kind === "base" ? checkpoint.sha : checkpoint.base;
+}
 
 export function newUniverseId(): string {
   const stamp = new Date().toISOString().replace(/[-:T.Z]/g, "").slice(2, 12);

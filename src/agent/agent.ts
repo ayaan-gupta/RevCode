@@ -45,6 +45,7 @@ import {
   landOutcome,
 } from "../universe/ui.js";
 import { formatLandIf, landIfPasses, type LandIfOutcome } from "../universe/land-if.js";
+import { syncFromProject } from "../universe/sync.js";
 import { Universe } from "../universe/universe.js";
 import { VERSION } from "../version.js";
 import { runCommand, suggestedModels, type CommandContext } from "./commands.js";
@@ -98,6 +99,8 @@ export class Agent {
   private disposed = false;
   /** Text the model should see with the next prompt (e.g. the output of a `!command`). */
   private pendingContext: string[] = [];
+  /** Files already reported as changed on both sides (reported once). */
+  private readonly reportedConflicts = new Set<string>();
   private initialMode: PermissionMode = "ask";
 
   constructor(args: CliArgs) {
@@ -578,6 +581,7 @@ export class Agent {
 
   private async interactiveTurn(rawInput: string, _display?: string): Promise<void> {
     const rt = await this.ensureRuntime();
+    if (rt.universe) await this.syncCopy(rt.universe);
     let prompt = rawInput;
 
     if (rt.hooks) {
@@ -645,6 +649,29 @@ export class Agent {
     if (result.durationMs > 10_000) this.ui.notify("RevCode finished");
     if (rt.permissions.getMode() === "plan" && result.stopReason === "complete" && result.finalContent.trim().length >= 200) {
       await this.offerPlanExecution(rt);
+    }
+  }
+
+  /** Bring edits made in the project since the last turn into the copy, and tell the model. */
+  private async syncCopy(universe: Universe): Promise<void> {
+    this.ui.setBusy(true);
+    try {
+      const result = await syncFromProject(universe);
+      const brought = [...result.pulled, ...result.merged];
+      if (brought.length > 0) {
+        const list = brought.length <= 4 ? brought.join(", ") : `${brought.slice(0, 4).join(", ")} and ${brought.length - 4} more`;
+        this.renderer.dimInfo(`Brought your latest edits into the copy: ${list}`);
+        this.pendingContext.push(`[The user changed these files in the project since your last turn; the copy now has their version${result.merged.length ? " (merged with your edits where both changed)" : ""}. Re-read them before relying on what you saw earlier: ${brought.join(", ")}]`);
+      }
+      const fresh = result.conflicts.filter((file) => !this.reportedConflicts.has(file));
+      for (const file of fresh) this.reportedConflicts.add(file);
+      if (fresh.length > 0) {
+        this.renderer.warn(`You and RevCode both changed the same lines in ${fresh.join(", ")}. The copy keeps RevCode's version; /land will show the conflict.`);
+      }
+    } catch (error) {
+      this.renderer.dimInfo(`Couldn't check the project for new edits: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      this.ui.setBusy(false);
     }
   }
 

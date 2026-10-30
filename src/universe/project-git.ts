@@ -16,6 +16,7 @@
 import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { runPlainGit } from "./git.js";
+import type { Universe } from "./universe.js";
 
 /** Git settings for the mirror: no background gc, no fsmonitor daemon for a throwaway repo. */
 const MIRROR_CONFIG: Array<[string, string]> = [
@@ -31,47 +32,45 @@ export interface MirrorOptions {
   linked?: readonly string[];
 }
 
-export async function mirrorProjectGit(projectRoot: string, workDir: string, options: MirrorOptions = {}): Promise<boolean> {
-  const git = (args: string[], cwd: string) => runPlainGit(args, { cwd, allowFailure: true, env: CLEAN_ENV });
-  const text = async (args: string[], cwd: string): Promise<string | undefined> => {
-    const result = await git(args, cwd);
-    return result.code === 0 ? result.stdout.toString("utf8").trim() : undefined;
-  };
+const git = (args: string[], cwd: string) => runPlainGit(args, { cwd, allowFailure: true, env: CLEAN_ENV });
+const text = async (args: string[], cwd: string): Promise<string | undefined> => {
+  const result = await git(args, cwd);
+  return result.code === 0 ? result.stdout.toString("utf8").trim() : undefined;
+};
 
+interface ProjectRepo {
+  /** The project's git dir (per worktree): where its index lives. */
+  own: string;
+  /** Shared git dir: objects, refs, config. */
+  common: string;
+}
+
+/** The project's repository, when the project root is its top level. */
+async function projectRepo(projectRoot: string): Promise<ProjectRepo | undefined> {
   const top = await text(["rev-parse", "--show-toplevel"], projectRoot);
-  if (!top || !samePath(top, projectRoot)) return false;
+  if (!top || !samePath(top, projectRoot)) return undefined;
   const commonDir = await text(["rev-parse", "--git-common-dir"], projectRoot);
   const gitDir = await text(["rev-parse", "--git-dir"], projectRoot);
-  if (!commonDir || !gitDir) return false;
-  const common = path.resolve(projectRoot, commonDir);
-  const own = path.resolve(projectRoot, gitDir);
-  const objects = path.join(common, "objects");
-  if (!existsSync(objects)) return false;
+  if (!commonDir || !gitDir) return undefined;
+  const repo = { own: path.resolve(projectRoot, gitDir), common: path.resolve(projectRoot, commonDir) };
+  return existsSync(path.join(repo.common, "objects")) ? repo : undefined;
+}
 
+export async function mirrorProjectGit(projectRoot: string, workDir: string, options: MirrorOptions = {}): Promise<boolean> {
+  const repo = await projectRepo(projectRoot);
+  if (!repo) return false;
   const dotGit = path.join(workDir, ".git");
   try {
     if ((await git(["init", "-q", workDir], workDir)).code !== 0) return false;
-    writeFileSync(path.join(dotGit, "objects", "info", "alternates"), `${objects}\n`);
+    writeFileSync(path.join(dotGit, "objects", "info", "alternates"), `${path.join(repo.common, "objects")}\n`);
     const linked = (options.linked ?? []).filter(Boolean);
     if (linked.length > 0) {
       mkdirSync(path.join(dotGit, "info"), { recursive: true });
       appendFileSync(path.join(dotGit, "info", "exclude"), linked.map((name) => `/${name}\n`).join(""));
     }
-    if (existsSync(path.join(common, "shallow"))) copyFileSync(path.join(common, "shallow"), path.join(dotGit, "shallow"));
 
-    const fetched = await git(
-      ["-c", "gc.auto=0", "fetch", "-q", "--no-tags", "--update-head-ok", "--no-write-fetch-head", projectRoot, "+refs/heads/*:refs/heads/*", "+refs/remotes/*:refs/remotes/*", "+refs/tags/*:refs/tags/*"],
-      workDir,
-    );
-    if (fetched.code !== 0) throw new Error("fetch failed");
-
-    const branch = await text(["symbolic-ref", "-q", "HEAD"], projectRoot);
-    const head = await text(["rev-parse", "-q", "--verify", "HEAD"], projectRoot);
-    if (branch) {
-      await git(["symbolic-ref", "HEAD", branch], workDir);
-    } else if (head) {
-      await git(["update-ref", "--no-deref", "HEAD", head], workDir);
-    }
+    if (!(await fetchRefs(projectRoot, repo, workDir))) throw new Error("fetch failed");
+    const head = await matchHead(projectRoot, workDir);
 
     // Same remotes, upstream tracking and identity as the project.
     const local = (await text(["config", "--local", "--get-regexp", "^(remote|branch|user)\\."], projectRoot)) ?? "";
@@ -83,21 +82,68 @@ export async function mirrorProjectGit(projectRoot: string, workDir: string, opt
     }
     for (const [key, value] of MIRROR_CONFIG) await git(["config", key, value], workDir);
 
-    if (head) {
-      // The project's own index keeps what the user had staged; rebuild from HEAD if it can't be used.
-      // `diff --cached` reads the index without hashing the work tree: 0 or 1 means it is usable.
-      if (!copyIndex(own, dotGit) || (await git(["diff", "--cached", "--quiet"], workDir)).code > 1) {
-        rmSync(path.join(dotGit, "index"), { force: true });
-        await git(["reset", "-q"], workDir);
-      }
-      const missing = (options.missing ?? []).filter(Boolean);
-      if (missing.length > 0) await git(["update-index", "--skip-worktree", "--", ...missing], workDir);
-    }
+    if (head) await matchIndex(repo, workDir, options.missing);
     return true;
   } catch {
     rmSync(dotGit, { recursive: true, force: true });
     return false;
   }
+}
+
+/**
+ * The project's HEAD moved since the copy was made (you committed, switched branch, pulled):
+ * bring the copy's refs up to date, and its HEAD and index too unless the agent committed there.
+ */
+export async function refreshProjectGit(universe: Universe): Promise<void> {
+  const { projectRoot } = universe.meta;
+  const workDir = universe.workDir;
+  const head = await text(["rev-parse", "-q", "--verify", "HEAD"], projectRoot);
+  if (!head || head === universe.meta.projectHead || !existsSync(path.join(workDir, ".git"))) return;
+  const repo = await projectRepo(projectRoot);
+  if (!repo) return;
+  const copyHead = await text(["rev-parse", "-q", "--verify", "HEAD"], workDir);
+  await fetchRefs(projectRoot, repo, workDir);
+  if (!copyHead || copyHead === universe.meta.projectHead) {
+    await matchHead(projectRoot, workDir);
+    await matchIndex(repo, workDir, universe.meta.skippedLarge);
+  }
+  universe.meta.projectHead = head;
+  universe.saveMeta();
+}
+
+/** HEAD of a project, if it has commits. */
+export async function gitHead(projectRoot: string): Promise<string | undefined> {
+  return text(["rev-parse", "-q", "--verify", "HEAD"], projectRoot);
+}
+
+async function fetchRefs(projectRoot: string, repo: ProjectRepo, workDir: string): Promise<boolean> {
+  if (existsSync(path.join(repo.common, "shallow"))) copyFileSync(path.join(repo.common, "shallow"), path.join(workDir, ".git", "shallow"));
+  const fetched = await git(
+    ["-c", "gc.auto=0", "fetch", "-q", "--no-tags", "--update-head-ok", "--no-write-fetch-head", projectRoot, "+refs/heads/*:refs/heads/*", "+refs/remotes/*:refs/remotes/*", "+refs/tags/*:refs/tags/*"],
+    workDir,
+  );
+  return fetched.code === 0;
+}
+
+/** Point the copy's HEAD where the project's is (same branch, or detached at the same commit). */
+async function matchHead(projectRoot: string, workDir: string): Promise<string | undefined> {
+  const branch = await text(["symbolic-ref", "-q", "HEAD"], projectRoot);
+  const head = await text(["rev-parse", "-q", "--verify", "HEAD"], projectRoot);
+  if (branch) await git(["symbolic-ref", "HEAD", branch], workDir);
+  else if (head) await git(["update-ref", "--no-deref", "HEAD", head], workDir);
+  return head;
+}
+
+/** The project's own index keeps what the user had staged; rebuild from HEAD if it can't be used. */
+async function matchIndex(repo: ProjectRepo, workDir: string, missing: readonly string[] = []): Promise<void> {
+  const dotGit = path.join(workDir, ".git");
+  // `diff --cached` reads the index without hashing the work tree: 0 or 1 means it is usable.
+  if (!copyIndex(repo.own, dotGit) || (await git(["diff", "--cached", "--quiet"], workDir)).code > 1) {
+    rmSync(path.join(dotGit, "index"), { force: true });
+    await git(["reset", "-q"], workDir);
+  }
+  const hidden = missing.filter(Boolean);
+  if (hidden.length > 0) await git(["update-index", "--skip-worktree", "--", ...hidden], workDir);
 }
 
 /** Copy the project's index (and split-index parts) into the mirror. */

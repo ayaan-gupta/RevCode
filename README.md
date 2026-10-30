@@ -46,7 +46,7 @@ Start `revcode` in a git project and it copies the project into a private worksp
 2. **It shows what it did.** Each answer ends with the commands that actually ran and their results, the files that changed, and whether the tests ran after the last edit.
 3. **You decide what happens.** `/land` applies the changes to your project, merging with anything you edited in the meantime. `/rewind 3` goes back to checkpoint 3. `/discard` throws everything away. If you quit with changes still in the copy, RevCode asks what to do with them.
 
-Outside a git project, or with `--no-universe`, RevCode works in the folder directly and asks before each change, like other agents.
+You can keep editing your files while it works: before each answer, RevCode brings your edits into the copy. Outside a git project, or with `--no-universe`, it works in the folder directly and asks before each change, like other agents.
 
 ## Race
 

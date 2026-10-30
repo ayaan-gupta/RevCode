@@ -259,7 +259,7 @@ export function resolveInside(root: string, rel: string): string {
   return resolved;
 }
 
-function readReal(target: string): Buffer | undefined {
+export function readReal(target: string): Buffer | undefined {
   try {
     const stat = lstatSync(target);
     if (stat.isSymbolicLink()) return Buffer.from(readlinkSync(target));
@@ -270,11 +270,11 @@ function readReal(target: string): Buffer | undefined {
   }
 }
 
-function isText(buffer: Buffer): boolean {
+export function isText(buffer: Buffer): boolean {
   return !buffer.subarray(0, 8000).includes(0);
 }
 
-async function threeWayMerge(ours: Buffer, base: Buffer, theirs: Buffer): Promise<{ clean: boolean; output: Buffer; conflicts: number }> {
+export async function threeWayMerge(ours: Buffer, base: Buffer, theirs: Buffer): Promise<{ clean: boolean; output: Buffer; conflicts: number }> {
   const dir = mkdtempSync(path.join(os.tmpdir(), "revcode-merge-"));
   try {
     const oursFile = path.join(dir, "ours");
@@ -297,7 +297,7 @@ async function threeWayMerge(ours: Buffer, base: Buffer, theirs: Buffer): Promis
   }
 }
 
-function writeItem(target: string, item: LandItem, content: Buffer): void {
+export function writeItem(target: string, item: Pick<LandItem, "isSymlink" | "newMode">, content: Buffer): void {
   mkdirSync(path.dirname(target), { recursive: true });
   if (item.isSymlink) {
     try {
@@ -318,7 +318,7 @@ function writeItem(target: string, item: LandItem, content: Buffer): void {
   renameSync(temp, target);
 }
 
-function removeFile(target: string, root: string): void {
+export function removeFile(target: string, root: string): void {
   try {
     unlinkSync(target);
   } catch {

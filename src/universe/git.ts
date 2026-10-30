@@ -54,6 +54,8 @@ export interface GitRunOptions {
   cwd?: string;
   /** Resolve with stdout even on non-zero exit (e.g. `merge-file`, `diff --exit-code`). */
   allowFailure?: boolean;
+  /** Use this index file instead of the repository's own (GIT_INDEX_FILE). */
+  indexFile?: string;
 }
 
 export interface GitResult {
@@ -67,7 +69,8 @@ export function runShadowGit(
   args: string[],
   options: GitRunOptions = {},
 ): Promise<GitResult> {
-  return runGit([...BASE_CONFIG, ...args], gitEnv(handle), options.cwd ?? handle.workTree, options);
+  const env = options.indexFile ? { ...gitEnv(handle), GIT_INDEX_FILE: options.indexFile } : gitEnv(handle);
+  return runGit([...BASE_CONFIG, ...args], env, options.cwd ?? handle.workTree, options);
 }
 
 /** Run git with no repository environment (merge-file, init of temp dirs, user repo queries). */

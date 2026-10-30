@@ -29,6 +29,16 @@ It works in the project directly instead, and asks before changes, when the fold
 - `node_modules`, `.venv` and `venv` are linked, not copied, so tests run straight away. They are shared with your project: `npm install` in the copy changes your real `node_modules`.
 - **Its own git repository** that mirrors yours: same history, branch, staged changes and remotes, so `git log`, `diff`, `blame` and `status` work. It borrows your repository's objects read-only and never writes to your `.git`. Commits made in the copy stay in the copy; landing applies file changes, not commits.
 
+## Editing while it works
+
+You can keep editing your files while RevCode works. Before each answer, your edits since the last one are brought into the copy, and the agent is told to re-read those files:
+
+- a file only you changed is updated in the copy;
+- a file you both changed is merged when the edits don't overlap;
+- overlapping edits are left alone and reported once; `/land` shows the conflict.
+
+Your commits, branch switches and pulls show up in the copy's git history too. Brought-in edits never count as the agent's changes, so landing doesn't apply them back or undo them, even after a `/rewind`.
+
 ## What still asks
 
 In a copy the agent doesn't ask before edits or commands. It still asks before anything that reaches outside the copy:
