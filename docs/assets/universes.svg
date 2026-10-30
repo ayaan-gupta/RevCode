@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="900" height="328" viewBox="0 0 900 328" role="img" aria-labelledby="t d">
   <title id="t">How a universe works</title>
-  <desc id="d">Your project stays as it is. RevCode works in a private copy, saving a checkpoint after every edit, and reports what it ran. Then you apply the changes, go back to a checkpoint, try another approach, re-run with another model, or throw it away.</desc>
+  <desc id="d">Your project stays as it is. RevCode works in a parallel universe, saving a checkpoint after every edit, and reports what it ran. Then you apply the changes, go back to a checkpoint, try another approach, re-run with another model, or throw it away.</desc>
   <defs>
     <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,1 L9,5 L0,9 z" fill="#71717a"/></marker>
   </defs>
@@ -23,7 +23,7 @@
 
   <!-- universe -->
   <rect class="node" x="292" y="34" width="330" height="132" rx="10" stroke="#fbbf24"/>
-  <text class="h" x="312" y="62" style="fill:#fbbf24">⌬ a private copy (a “universe”)</text>
+  <text class="h" x="312" y="62" style="fill:#fbbf24">⌬ a parallel universe</text>
   <text class="mut sm" x="312" y="82">RevCode edits and runs commands here, without asking</text>
   <path d="M316 120H596" stroke="#52525b" stroke-width="2"/>
   <path d="M412 120q18-24 42-24h110" fill="none" stroke="#f472b6" stroke-width="1.5" stroke-dasharray="4 3"/>

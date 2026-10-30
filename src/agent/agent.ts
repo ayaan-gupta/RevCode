@@ -246,7 +246,7 @@ export class Agent {
     const next = order[(order.indexOf(current) + 1) % order.length] ?? "ask";
     rt.permissions.setMode(next);
     this.refreshStatus();
-    this.ui.hint(`Mode: ${next === "yolo" && rt.universe ? "private copy" : next}`);
+    this.ui.hint(`Mode: ${next === "yolo" && rt.universe ? "parallel universe" : next}`);
   }
 
   // --- runtime ----------------------------------------------------------------
@@ -268,7 +268,7 @@ export class Agent {
         universe = Universe.open(this.resumed.meta.universeId);
         if (universe.meta.status === "discarded") universe = undefined;
       } catch {
-        warn(`The private copy from that session (${this.resumed.meta.universeId}) no longer exists.`);
+        warn(`The universe from that session (${this.resumed.meta.universeId}) no longer exists.`);
       }
     }
 
@@ -304,7 +304,7 @@ export class Agent {
     this.renderer.setMode(this.displayMode());
   }
 
-  /** The permission mode as the status bar shows it: no-prompt mode in a universe is the private copy. */
+  /** The permission mode as the status bar shows it: no-prompt mode in a universe gets its own label. */
   private displayMode(): string {
     const mode = this.runtime?.permissions.getMode() ?? "ask";
     return mode === "yolo" && this.runtime?.universe ? "copy" : mode;
@@ -512,7 +512,7 @@ export class Agent {
     }
     if (runtime.universe) {
       const mark = this.style.paint("accent", this.style.unicode ? "⌬" : "#");
-      this.renderer.info(`${mark} Working in a private copy of this project. Your files change only when you ${this.style.paint("accent", "/land")}.`);
+      this.renderer.info(`${mark} You're in a parallel universe. Nothing here touches your real files until you ${this.style.paint("accent", "/land")}.`);
     } else if (runtime.universeSkipped) {
       this.renderer.dimInfo(`Working in this folder directly (${runtime.universeSkipped}), so RevCode asks before changing files.`);
     }
@@ -729,7 +729,7 @@ export class Agent {
     if (files === 0) return false;
     const { style } = this;
     const choice = await this.ui.select({
-      title: [`${style.paint("warn", style.glyphs.warn)} ${style.bold(`${plural(files, "changed file")} ${files === 1 ? "is" : "are"} only in the private copy.`)}`],
+      title: [`${style.paint("warn", style.glyphs.warn)} ${style.bold(`${plural(files, "changed file")} only ${files === 1 ? "exists" : "exist"} in this universe.`)}`],
       options: [{ label: "Apply to my project, then quit" }, { label: `Keep ${files === 1 ? "it" : "them"} for later and quit` }, { label: "Stay" }],
       hotkeys: { y: 0, a: 0, k: 1, n: 1, s: 2 },
       cancelIndex: 2,
@@ -761,7 +761,7 @@ export class Agent {
         const stat = await universe.diffStat();
         if (stat.files > 0) {
           this.renderer.info(
-            `${plural(stat.files, "changed file")} (+${stat.insertions} ${this.style.glyphs.minus}${stat.deletions}) ${stat.files === 1 ? "is" : "are"} waiting in the private copy.\n  Pick up where you left off: revcode -r ${rt?.sessionId}\n  Or apply them now:        revcode universes land ${universe.id}`,
+            `${plural(stat.files, "changed file")} (+${stat.insertions} ${this.style.glyphs.minus}${stat.deletions}) ${stat.files === 1 ? "is" : "are"} still in universe ${universe.id}.\n  Pick up where you left off: revcode -r ${rt?.sessionId}\n  Or land them now:          revcode universes land ${universe.id}`,
           );
         } else if (universe.meta.landedCount === 0 && rt && !universe.checkpoints().some((c) => c.changed && c.kind === "tool" && c.tool !== "sync")) {
           // The agent never changed anything here: don't leave an empty copy behind.

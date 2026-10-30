@@ -85,8 +85,8 @@ const MODE_LABEL: Record<string, string> = {
   "accept-edits": "accept edits",
   plan: "plan · read-only",
   yolo: "yolo · no prompts",
-  // yolo inside a universe: edits go to a private copy; reaching outside it still asks.
-  copy: "private copy · edits freely",
+  // yolo inside a universe: edits stay in the universe; reaching outside it still asks.
+  copy: "⌬ parallel universe · no prompts",
 };
 
 const PREFIX_WIDTH = 2;

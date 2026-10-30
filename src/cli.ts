@@ -395,7 +395,7 @@ function parseFlags(
   if (args.landIf !== undefined) {
     if (!args.landIf.trim()) throw new Error('--land-if needs a check command, e.g. --land-if "npm test"');
     if (explicit.has("universe") && args.universe === false) {
-      throw new Error("--land-if works on a private copy of the project; it can't be combined with --no-universe.");
+      throw new Error("--land-if runs the task in a parallel universe; it can't be combined with --no-universe.");
     }
     args.universe = true;
     explicit.add("universe");
@@ -509,14 +509,14 @@ export function resolveArgs(args: CliArgs, loaded: LoadedConfig, env: NodeJS.Pro
   return out;
 }
 
-export const HELP_TEXT = `RevCode — a coding agent that works on a private copy of your project
+export const HELP_TEXT = `RevCode — your new coding agent (working in a parallel universe)
 
 Usage:
-  revcode [flags]                 interactive session (in a git project it works on a private copy;
-                                  your files change only when you /land)
+  revcode [flags]                 interactive session (in a git project it works in a parallel
+                                  universe; your files change only when you /land)
   revcode run "<task>" [flags]    run one task and exit
-  revcode race "<task>" [flags]   several attempts at once, each in its own copy; checks them
-                                  with your tests and applies the best one
+  revcode race "<task>" [flags]   several attempts at once, each in its own universe; your tests
+                                  pick the winner
   revcode tune [flags]            Dyno: benchmark & tune the harness for --model
   revcode universes <action>      list | show | diff | land | discard | share | replay | compare | purge
   revcode sessions                list saved sessions
@@ -536,9 +536,9 @@ Common flags:
       --mode <mode>         ask | accept-edits | plan | yolo   (default: ask; yolo when headless or in a copy)
       --allow <rule,...>    permission allow rules, e.g. "shell(git status*)"
       --deny <rule,...>     permission deny rules
-  -u, --universe            always work on a private copy (--no-universe: always work in the project)
+  -u, --universe            always work in a parallel universe (--no-universe: never)
       --max-cost <dollars>  stop before model calls cost more than this (whole session or run)
-      --land-if "<check>"   with run: work on a copy, run the check there, apply only if it passes
+      --land-if "<check>"   with run: land the result only if the check passes
   -c, --continue            resume the latest session in this directory
   -r, --resume [id]         resume a session
       --profile <p>         auto | default | path to a profile JSON

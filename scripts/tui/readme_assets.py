@@ -141,7 +141,8 @@ def pick(tape):
     confirm = first(tape, lambda t: "Apply these changes" in t, receipt)
     landed = first(tape, lambda t: "Landed:" in t, confirm)
     return [
-        (first(tape, lambda t: "Ask RevCode" in t), 2.6),
+        # The poster: banner plus the line saying the session is in a universe.
+        (first(tape, lambda t: "Ask RevCode" in t and "parallel universe." in t), 2.6),
         (typing[len(typing) // 3], 0.5),
         (typing[2 * len(typing) // 3], 0.5),
         (typed, 0.9),

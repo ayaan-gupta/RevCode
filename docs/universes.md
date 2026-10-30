@@ -1,17 +1,17 @@
-# Private copies (universes)
+# Parallel universes
 
-A **universe** is a private, recorded copy of your project. RevCode edits files and runs commands there without asking, and nothing reaches your real project until you **land** it.
+A **universe** is a forked, recorded copy of your project. The agent works there without asking. Your real files don't change until you **land** it.
 
 ## Why
 
-Permission prompts are the usual answer to "what if the agent does something dumb?", and they fail both ways: people click through them or turn them off. A copy changes the question: the agent can do anything *to the copy*, and you review one changeset at the end.
+Permission prompts fail both ways. Either you click "yes" forty times, or you turn them off and hope. A universe skips the question: the agent can do whatever it likes to the copy, and you look at one changeset at the end.
 
-## When you get a copy
+## When you get a universe
 
-`revcode` in a git project works on a copy by default. The first line of the session says so:
+`revcode` in a git repo starts in a universe by default. The session tells you:
 
 ```
-⌬ Working in a private copy of this project. Your files change only when you /land.
+⌬ You're in a parallel universe. Nothing here touches your real files until you /land.
 ```
 
 It works in the project directly instead, and asks before changes, when the folder isn't a git repository, uses git submodules, has more than 25,000 files or 1 GB to copy, or is your home folder. The session says which in one line.

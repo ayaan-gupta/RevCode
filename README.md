@@ -6,11 +6,17 @@
   </picture>
 </p>
 
-<h3 align="center">Let it run. Keep what works.</h3>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/tagline-dark.svg">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/tagline-light.svg">
+    <img src="docs/assets/tagline-dark.svg" alt="Your new coding agent (working in a parallel universe)" width="620">
+  </picture>
+</p>
 
 <p align="center">
-  RevCode never stops to ask permission, because nothing it does touches your files until you say so.<br>
-  Every edit and command can be undone, and <code>revcode race</code> tries three times at once and keeps the one that passes your tests.
+  It codes in a parallel copy of your project, so there's nothing to approve and nothing it can wreck.<br>
+  Like what it did? <code>/land</code> it. Don't? It never happened.
 </p>
 
 <p align="center">
@@ -20,79 +26,87 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/hero.svg" alt="RevCode fixing a failing test in a copy of the project: it reads the code, edits it, runs the tests, shows what it did, and applies the change." width="860">
+  <img src="docs/assets/hero.svg" alt="RevCode fixing a failing test inside its parallel universe: it reads the code, edits it, runs the tests, then the fix is landed into the real project." width="860">
 </p>
 
-<p align="center"><sub>A real session: RevCode fixes a failing test in a copy of the project, then the change is applied with <code>/land</code>.</sub></p>
+<p align="center"><sub>Real session, real model. RevCode fixes a failing test in its universe, then <code>/land</code> brings the fix home.</sub></p>
 
 ## Install
 
 ```bash
 git clone https://github.com/ayaan-gupta/RevCode && cd RevCode
 npm install && npm run bundle
-cp dist/revcode.mjs ~/.local/bin/revcode     # one file; anywhere on your PATH works
-revcode                                      # the first run asks for a provider and an API key
+cp dist/revcode.mjs ~/.local/bin/revcode   # it's one file, put it anywhere on your PATH
+revcode                                    # first run asks which model to use
 ```
 
-Needs Node 20+, `git`, `ripgrep` and `bash` on Linux or macOS.
+Node 20+, `git`, `ripgrep` and `bash`. Linux or macOS.
 
-## How it works
+## Parallel universes
 
-<p align="center"><img src="docs/assets/universes.svg" alt="Your project stays as it is. RevCode works in a private copy, saving a checkpoint after every edit, and reports what it did. Then you apply the changes, go back, try another approach, re-run with another model, or throw it away." width="860"></p>
+<p align="center"><img src="docs/assets/universes.svg" alt="Your project stays as it is. RevCode works in a parallel universe, saving a checkpoint after every edit, and reports what it did. Then you land the changes, rewind, fork, replay on another model, or throw it away." width="860"></p>
 
-Run `revcode` in a git project. It builds a *universe*: a recorded copy of your project, uncommitted edits included, with your full git history inside.
+Start `revcode` in a git repo and it forks your project into a universe. Same files, same uncommitted changes, same git history. That's where the agent works.
 
-1. **It never asks.** It edits and runs commands in the universe, so there is nothing to approve. Only actions that reach past it, like `git push`, deploying or `sudo`, still ask.
-2. **It records everything.** Every edit and command is a checkpoint. `/rewind 3` puts the files *and* the conversation back to step 3.
-3. **You keep what works.** `/land` merges the result into your project, around anything you changed meanwhile. Conflicting edits are never overwritten.
+It edits code, runs your tests, breaks things and fixes them, and you approve none of it. Your real files aren't involved. Anything that leaves the universe still asks first: `git push`, deploys, `sudo`.
 
-Keep coding while it works: your edits flow into the universe before each answer. Outside a git project, or with `--no-universe`, RevCode works in the folder directly and asks first, like other agents.
+Every step is a checkpoint. Went sideways at step 6? `/rewind 5` puts back the files *and* the conversation.
 
-## Why not just a git worktree?
+Done? `/land` merges the result into your project. If you edited the same files in the meantime, it merges around your changes. It won't overwrite them.
 
-A worktree gives an agent a separate folder. A universe gives it a separate folder that also remembers, merges and races.
+Keep coding the whole time, by the way. Your edits get pulled into the universe before each answer.
 
-| | git worktree | RevCode universe |
+### Isn't that just a git worktree?
+
+No. A worktree is a checkout of your last commit, and that's all it is.
+
+| | git worktree | universe |
 | --- | --- | --- |
-| Starts from | your last commit | your files right now: uncommitted edits, `.env` and dependencies included |
-| Undo | the commits you remember to make | every edit and command, files and conversation together |
-| Your edits while it works | it never sees them | brought in before each answer |
-| Getting the result back | commit, merge, resolve | `/land`: a 3-way merge into your working files |
-| Your repository | shares its branches and refs | read, never written |
-| Several attempts | one worktree each, set up by hand | `revcode race`: three at once, tested, best one picked |
-| Setup | `git worktree add`, reinstall dependencies | none, it's the default |
+| Starts from | your last commit | what's on disk right now, uncommitted work and `.env` included |
+| Undo | whatever you committed | any step |
+| Sees your new edits | no | before every answer |
+| Getting changes back | commit, merge, cherry-pick | `/land` |
+| Your `.git` | shared (branches, refs) | never written |
+| Three tries at once | three worktrees, by hand | `revcode race` |
+| Setup | `git worktree add`, reinstall deps | none |
 
 ## Race
 
-<p align="center"><img src="docs/assets/race.svg" alt="revcode race: three attempts fix a failing test at the same time, each in its own copy; all pass npm test, two wrote the same code, and the best one is applied." width="860"></p>
+<p align="center"><img src="docs/assets/race.svg" alt="revcode race: three attempts fix a failing test at the same time, each in its own universe; all pass npm test, two wrote the same code, and the best one is landed." width="860"></p>
 
-`revcode race "fix the failing test"` runs three attempts at once, each in its own copy. Your tests check every result, the best one is picked, and you choose whether to apply it. If a model gets a task right two times out of three, one of three tries almost always does, and three tries on a cheap model usually cost less than one on a frontier model. Race different models with `--models glm-5.2,anthropic:claude-sonnet-5-5`; cap the whole race with `--max-cost 1`.
+Models are inconsistent. Ask the same one twice and you can get two different fixes, one of them wrong. So don't ask once:
 
-## Features
+```bash
+revcode race "fix the flaky checkout test"
+```
 
-- **Branch off any step.** `/fork 4` starts a second universe from checkpoint 4 to try a different approach.
-- **Apply only if the tests pass.** `revcode run "upgrade lodash" --land-if "npm test"` works on a copy and changes your project only if the check passes. Made for scripts, cron jobs and CI.
-- **A spending cap.** Every answer shows what it cost. `--max-cost 2` stops before a session spends more than $2; `/cost 5` sets one mid-session.
-- **Try another model on the same task.** `revcode universes replay <id> --model claude-sonnet-5-5` re-runs your prompts from the same starting point, and `revcode universes compare` runs your tests on both results.
-- **Tunes itself to your model.** `revcode tune` tests which edit format, prompt style and settings work best for the model you use, and keeps a change only if it still helps when re-checked.
-- **Any model.** Z.ai GLM, Claude, OpenAI, OpenRouter, Ollama, or any OpenAI-compatible server.
-- **Small.** The whole agent is one 1 MB file with no dependencies: copy it anywhere and run it. Claude Code, OpenCode and Gemini CLI each install about 100 to 300 MB.
-- **Extensible.** `AGENTS.md`, MCP servers, skills, hooks and custom slash commands.
+Three attempts run side by side, each in its own universe. Your test suite grades them, and the winner is one keypress from landing. Mix models with `--models glm-5.2,anthropic:claude-sonnet-5-5`. Cap the bill with `--max-cost 1`.
+
+## Also
+
+- **Ship on green:** `revcode run "bump deps" --land-if "npm test"` lands only if the tests pass. Built for cron and CI
+- **Spending cap:** every answer shows what it cost, and `--max-cost 2` won't let a session go past two dollars
+- **Fork:** `/fork 4` spins off a second universe from step 4 to try another idea
+- **Rematch:** replay a whole session on a different model, then compare the two results
+- **Self-tuning:** `revcode tune` works out which prompts and edit formats your model handles best
+- **Any model:** GLM, Claude, OpenAI, OpenRouter, Ollama, or anything that speaks the OpenAI API
+- **Tiny:** one 1 MB file, zero dependencies. Claude Code weighs about 300 MB
+- **Extensible:** `AGENTS.md`, MCP, skills, hooks and your own slash commands
 
 ## Self-tuning
 
 <p align="center"><img src="docs/assets/dyno.svg" alt="revcode tune: run a baseline, try one change at a time on the tasks that failed, then re-check the best change against a fresh baseline." width="860"></p>
 
-The same model can score very differently depending on how the agent around it is set up. `revcode tune` runs a built-in set of coding tasks against your model, tries one setting at a time, and re-checks the winner against a fresh run so a lucky result can't fool it. The tuned settings load automatically from then on.
+Put the same model in two different harnesses and its score can move by 10 points or more. `revcode tune` runs a suite of coding tasks against your model and tries one setting at a time. The winner has to win again on a fresh run, because lucky streaks happen. After that it loads on its own.
 
 ```bash
-revcode tune --model glm-5.2 --dry-run      # show the plan without calling the model
+revcode tune --model glm-5.2 --dry-run      # see the plan, no model calls
 revcode tune --model glm-5.2 --budget 150   # run it
 ```
 
 ## Docs
 
-[Private copies](docs/universes.md) · [Race](docs/race.md) · [Self-tuning](docs/dyno.md) · [Terminal UI and keys](docs/tui.md) · [Benchmark notes](docs/terminal-bench.md) · [Reference](docs/reference.md)
+[Universes](docs/universes.md) · [Race](docs/race.md) · [Self-tuning](docs/dyno.md) · [Terminal UI and keys](docs/tui.md) · [Benchmark notes](docs/terminal-bench.md) · [Reference](docs/reference.md)
 
 ## License
 
