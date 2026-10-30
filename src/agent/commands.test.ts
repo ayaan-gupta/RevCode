@@ -246,6 +246,20 @@ describe("built-in slash commands", () => {
     expect(ui.text()).toContain("No hooks configured");
   });
 
+  it("/cost shows dollars and sets or removes a spending cap", async () => {
+    await runCommand(ctx, "/cost", "");
+    expect(ui.text()).toMatch(/Cost\s+\$0\.00/);
+    await runCommand(ctx, "/cost", "$5");
+    expect(runtime.spend.capUsd).toBe(5);
+    expect(ui.text()).toContain("Spending cap set to $5.00");
+    await runCommand(ctx, "/cost", "");
+    expect(ui.text()).toContain("of a $5.00 cap");
+    await runCommand(ctx, "/cost", "off");
+    expect(runtime.spend.capUsd).toBeUndefined();
+    await runCommand(ctx, "/cost", "lots");
+    expect(ui.text()).toContain("Usage: /cost [dollars | off]");
+  });
+
   it("/receipt reports when there is none", async () => {
     await runCommand(ctx, "/receipt", "");
     expect(ui.text()).toContain("No receipt yet");

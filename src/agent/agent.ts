@@ -763,8 +763,8 @@ export class Agent {
           this.renderer.info(
             `${plural(stat.files, "changed file")} (+${stat.insertions} ${this.style.glyphs.minus}${stat.deletions}) ${stat.files === 1 ? "is" : "are"} waiting in the private copy.\n  Pick up where you left off: revcode -r ${rt?.sessionId}\n  Or apply them now:        revcode universes land ${universe.id}`,
           );
-        } else if (universe.meta.landedCount === 0 && rt) {
-          // Nothing was ever changed here: don't leave an empty copy behind.
+        } else if (universe.meta.landedCount === 0 && rt && !universe.checkpoints().some((c) => c.changed && c.kind === "tool" && c.tool !== "sync")) {
+          // The agent never changed anything here: don't leave an empty copy behind.
           universe.purge();
           rt.universe = undefined;
           if (rt.turn.value > 0) this.saveSessionSnapshot(rt);

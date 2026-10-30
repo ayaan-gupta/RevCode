@@ -107,4 +107,23 @@ describe("terminal and prompt options", () => {
     expect(parseCommandLine(["login"]).kind).toBe("setup");
     expect(parseCommandLine(["completion", "zsh"])).toMatchObject({ kind: "completion", shell: "zsh" });
   });
+
+  it("parses race with its own flags", () => {
+    const race = parseCommandLine(["race", "fix", "the", "bug", "--tries", "4", "--models", "glm-5.2,anthropic:claude-sonnet-5-5", "--verify", "npm test", "-y", "--max-cost", "2"]);
+    expect(race).toMatchObject({
+      kind: "race",
+      args: { prompt: "fix the bug", headless: true, maxCost: 2 },
+      options: { tries: 4, models: ["glm-5.2", "anthropic:claude-sonnet-5-5"], check: "npm test", yes: true },
+    });
+    expect(() => parseCommandLine(["race", "x", "--tries", "0"])).toThrow(/positive integer/);
+    expect(() => parseCommandLine(["--tries", "3"])).toThrow(/Unknown argument/);
+  });
+
+  it("--land-if works on a copy and needs a task", () => {
+    const run = parseCommandLine(["run", "bump deps", "--land-if", "npm test"]);
+    expect(run).toMatchObject({ kind: "run", args: { landIf: "npm test", universe: true, headless: true } });
+    expect(() => parseCommandLine(["run", "x", "--land-if", "true", "--no-universe"])).toThrow(/can't be combined with --no-universe/);
+    expect(() => parseCommandLine(["--land-if", "true"])).toThrow(/revcode run/);
+    expect(parseCommandLine(["-p", "x", "--land-if", "true"])).toMatchObject({ args: { landIf: "true", headless: true } });
+  });
 });
