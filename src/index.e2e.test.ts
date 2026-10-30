@@ -141,7 +141,31 @@ describe("revcode CLI (end to end)", () => {
     const misuse = revcode(["--land-if", "true", "--provider", "local-test", "--model", "test"], project, home);
     expect(misuse.status).toBe(1);
     expect(misuse.stderr).toContain('revcode run "<task>" --land-if "<check>"');
-  });
+  }, 60_000);
+
+  it("race runs attempts in copies, checks them, and applies the best", () => {
+    const project = mkdtempSync(path.join(os.tmpdir(), "revcode-e2e-race-"));
+    writeFileSync(path.join(project, "a.txt"), "before\n");
+    const task = (content: string) => `/tool write_file {"path":"a.txt","content":"${content}\\n"}`;
+    const race = revcode(
+      ["race", "--provider", "local-test", "--model", "test", "--no-snapshot", "--no-instructions", "--tries", "2", "--check", "grep -q raced a.txt", "--yes", task("raced")],
+      project,
+      home,
+    );
+    // Only Node's own proxy warning (sandboxed CI) may appear on stderr.
+    expect(race.stderr.split("\n").filter((line) => line && !/UNDICI-EHPA|--trace-warnings/.test(line))).toEqual([]);
+    expect(race.status).toBe(0);
+    expect(race.stdout).toContain("#1 test: check passed");
+    expect(race.stdout).toMatch(/#1 +test +\S passed .*best/);
+    expect(race.stdout).not.toContain("spent $"); // the local test model is free
+    expect(race.stdout).toContain("same code as #1");
+    expect(race.stdout).toContain("Applied #1.");
+    expect(execFileSync("cat", [path.join(project, "a.txt")], { encoding: "utf8" })).toBe("raced\n");
+
+    const noTask = revcode(["race", "--provider", "local-test", "--model", "test"], project, home);
+    expect(noTask.status).toBe(2);
+    expect(noTask.stderr).toContain('revcode race "<task>"');
+  }, 60_000);
 });
 
 describe("interactive session without a terminal (piped stdin)", () => {

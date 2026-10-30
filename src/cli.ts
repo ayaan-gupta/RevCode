@@ -106,8 +106,17 @@ export interface TuneOptions {
   yes: boolean;
 }
 
+export interface RaceOptions {
+  tries?: number;
+  models?: string[];
+  check?: string;
+  parallel?: number;
+  yes: boolean;
+}
+
 export type Command =
   | { kind: "run"; args: CliArgs }
+  | { kind: "race"; args: CliArgs; options: RaceOptions }
   | { kind: "tune"; args: CliArgs; options: TuneOptions }
   | { kind: "universes"; args: CliArgs; action: string; rest: string[] }
   | { kind: "sessions"; args: CliArgs }
@@ -174,6 +183,20 @@ const TUNE_FLAGS: Record<string, { key: keyof TuneOptions; kind: FlagKind }> = {
   "--yes": { key: "yes", kind: "boolean" },
 };
 
+const RACE_FLAGS: Record<string, { key: keyof RaceOptions; kind: FlagKind }> = {
+  "--tries": { key: "tries", kind: "int" },
+  "--models": { key: "models", kind: "list" },
+  "--check": { key: "check", kind: "string" },
+  "--verify": { key: "check", kind: "string" },
+  "--parallel": { key: "parallel", kind: "int" },
+  "--yes": { key: "yes", kind: "boolean" },
+};
+
+/** Flags only `revcode race` takes, for shell completion. */
+export function raceFlagNames(): string[] {
+  return Object.keys(RACE_FLAGS);
+}
+
 /** Every long flag (and short alias) the main command accepts, for shell completion. */
 export function flagNames(): { long: string[]; short: string[]; valued: string[] } {
   const long = Object.keys(FLAGS);
@@ -217,6 +240,13 @@ export function parseCommandLine(argv: string[]): Command {
       const { args, tune } = parseFlags(rest, { tune: true });
       return { kind: "tune", args, options: finishTune(tune) };
     }
+    case "race": {
+      const { args, positional, race } = parseFlags(rest, { allowPositional: true, race: true });
+      const prompt = positional.join(" ").trim();
+      if (prompt) args.prompt = prompt;
+      args.headless = true;
+      return { kind: "race", args, options: { ...race, yes: race.yes ?? false } };
+    }
     case "universes":
     case "universe": {
       const action = rest[0] && !rest[0].startsWith("-") ? rest[0] : "list";
@@ -255,6 +285,7 @@ export function parseArgs(argv: string[]): CliArgs {
 interface ParseOptions {
   allowPositional?: boolean;
   tune?: boolean;
+  race?: boolean;
   /** Collect unknown --flags into `positional` (universes subcommands take their own flags). */
   passthroughUnknown?: boolean;
 }
@@ -262,11 +293,12 @@ interface ParseOptions {
 function parseFlags(
   argv: string[],
   options: ParseOptions,
-): { args: CliArgs; positional: string[]; tune: Partial<TuneOptions> } {
+): { args: CliArgs; positional: string[]; tune: Partial<TuneOptions>; race: Partial<RaceOptions> } {
   const args = defaultArgs();
   const explicit = new Set<string>();
   const positional: string[] = [];
   const tune: Record<string, unknown> = {};
+  const race: Record<string, unknown> = {};
   const record = args as unknown as Record<string, unknown>;
 
   for (let index = 0; index < argv.length; index += 1) {
@@ -279,7 +311,7 @@ function parseFlags(
       arg = arg.slice(0, eq);
     }
     arg = SHORT_ALIASES.get(arg) ?? arg;
-    if (options.tune && arg === "-y") arg = "--yes";
+    if ((options.tune || options.race) && arg === "-y") arg = "--yes";
 
     // Boolean negation: --no-snapshot, --no-mcp, --no-hooks, --no-universe
     if (arg.startsWith("--no-") && FLAGS[`--${arg.slice(5)}`]?.kind === "boolean") {
@@ -289,7 +321,7 @@ function parseFlags(
       continue;
     }
 
-    const tuneSpec = options.tune ? TUNE_FLAGS[arg] : undefined;
+    const tuneSpec = options.tune ? TUNE_FLAGS[arg] : options.race ? RACE_FLAGS[arg] : undefined;
     const spec = tuneSpec ?? FLAGS[arg];
     if (!spec) {
       if (arg.startsWith("-") && !(options.passthroughUnknown && arg.startsWith("--"))) {
@@ -306,7 +338,7 @@ function parseFlags(
       throw new Error(`Unknown argument: ${argv[index]}`);
     }
 
-    const target = tuneSpec ? tune : record;
+    const target = tuneSpec ? (options.race ? race : tune) : record;
     const key = tuneSpec ? tuneSpec.key : (spec as FlagSpec).key;
     let value: unknown;
 
@@ -376,7 +408,7 @@ function parseFlags(
     throw new Error('--land-if runs one task unattended: revcode run "<task>" --land-if "<check>"');
   }
   args.explicit = [...explicit];
-  return { args, positional, tune: tune as Partial<TuneOptions> };
+  return { args, positional, tune: tune as Partial<TuneOptions>, race: race as Partial<RaceOptions> };
 }
 
 function finishTune(raw: Partial<TuneOptions>): TuneOptions {

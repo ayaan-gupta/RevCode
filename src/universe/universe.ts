@@ -445,6 +445,12 @@ export class Universe {
     return new Set(out);
   }
 
+  /** Content hash of the current file tree: equal across universes exactly when their files are equal. */
+  async treeSha(): Promise<string> {
+    const head = await this.snapshotHead("tree probe");
+    return gitText(this.handle, ["rev-parse", `${head}^{tree}`]);
+  }
+
   async diffStat(): Promise<{ files: number; insertions: number; deletions: number }> {
     const head = await this.snapshotHead("stat probe");
     const out = (await runShadowGit(this.handle, ["diff", "--numstat", "-z", "--no-renames", this.meta.baseSha, head])).stdout.toString("utf8");

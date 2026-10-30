@@ -91,6 +91,8 @@ export class MeteredLlm implements LlmClient {
     readonly meter: SpendMeter,
     readonly price: ModelPrice | undefined,
     private readonly model: string,
+    /** Told the cost of each call (a runtime's own total, when the meter is shared). */
+    private readonly onCost?: (usd: number) => void,
   ) {
     if (inner.describeImage) {
       // Image questions go to a separate (cheap) vision model; they are not priced.
@@ -116,6 +118,7 @@ export class MeteredLlm implements LlmClient {
     } else {
       this.meter.record(cost);
       this.lastCallUsd = cost;
+      this.onCost?.(cost);
     }
     return response;
   }

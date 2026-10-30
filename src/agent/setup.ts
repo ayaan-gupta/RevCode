@@ -100,6 +100,8 @@ export interface Runtime {
   spend: SpendMeter;
   /** Price of the current model, when known. */
   price?: ModelPrice;
+  /** What this runtime's own model calls have cost (the meter may be shared with others). */
+  costUsd(): number;
   sessionId: string;
   turn: { value: number };
   /** Context returned by SessionStart hooks, to prepend to the first turn. */
@@ -158,12 +160,16 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const spend = options.spend ?? new SpendMeter(args.maxCost);
   const price = priceFor(args.model, provider, args.pricing);
   let currentModel = args.model;
+  let ownCost = 0;
+  const onCost = (usd: number): void => {
+    ownCost += usd;
+  };
   if (spend.capUsd !== undefined && !price && provider !== "openrouter") {
     throw new Error(
       `--max-cost needs to know what ${args.model} costs. Add it to .revcode/config.json, e.g. "pricing": { "${args.model}": { "input": 1.0, "output": 3.0 } } ($ per million tokens).`,
     );
   }
-  let llm: LlmClient = new MeteredLlm(options.llm ?? createLlmClient({ model: args.model, provider: args.provider, baseUrl: args.baseUrl }), spend, price, args.model);
+  let llm: LlmClient = new MeteredLlm(options.llm ?? createLlmClient({ model: args.model, provider: args.provider, baseUrl: args.baseUrl }), spend, price, args.model, onCost);
   let runtimeLlm = llm;
 
   const resolved = options.profile
@@ -410,13 +416,14 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     cwd,
     spend,
     price,
+    costUsd: () => ownCost,
     sessionId,
     turn,
     sessionStartContext,
     getLlm: () => runtimeLlm,
     setLlm(next) {
       // Everything the session calls is metered, including a client swapped in later.
-      const metered = next instanceof MeteredLlm ? next : new MeteredLlm(next, spend, runtime.price, currentModel);
+      const metered = next instanceof MeteredLlm ? next : new MeteredLlm(next, spend, runtime.price, currentModel, onCost);
       llm = metered;
       runtimeLlm = metered;
       engine.setLlm(metered);
@@ -427,7 +434,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
       if (spend.capUsd !== undefined && !nextPrice && nextProvider !== "openrouter") {
         throw new Error(`The spending cap needs a price for ${model}; add it under "pricing" in .revcode/config.json.`);
       }
-      const nextLlm = new MeteredLlm(createLlmClient({ model, provider: args.provider, baseUrl: args.baseUrl }), spend, nextPrice, model);
+      const nextLlm = new MeteredLlm(createLlmClient({ model, provider: args.provider, baseUrl: args.baseUrl }), spend, nextPrice, model, onCost);
       currentModel = model;
       runtime.price = nextPrice;
       const next = options.profile

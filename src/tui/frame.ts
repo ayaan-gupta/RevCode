@@ -77,6 +77,7 @@ const MODE_ROLE: Record<string, Role | undefined> = {
   "accept-edits": "accent",
   plan: "ok",
   yolo: "warn",
+  copy: "accent",
 };
 
 const MODE_LABEL: Record<string, string> = {
@@ -84,6 +85,8 @@ const MODE_LABEL: Record<string, string> = {
   "accept-edits": "accept edits",
   plan: "plan · read-only",
   yolo: "yolo · no prompts",
+  // yolo inside a universe: edits go to a private copy; reaching outside it still asks.
+  copy: "private copy · edits freely",
 };
 
 const PREFIX_WIDTH = 2;

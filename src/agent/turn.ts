@@ -39,9 +39,9 @@ export async function runTrackedTurn(
     universe.recordPrompt(turnNo, options.recordedPrompt ?? prompt);
   }
 
-  const spentBefore = rt.spend.spentUsd;
+  const spentBefore = rt.costUsd();
   const result = await rt.engine.runTurn(prompt, options.signal);
-  const costUsd = rt.price || rt.spend.spentUsd > spentBefore ? rt.spend.spentUsd - spentBefore : undefined;
+  const costUsd = rt.price || rt.costUsd() > spentBefore ? rt.costUsd() - spentBefore : undefined;
 
   let files: ReceiptFile[] | undefined;
   let existedBefore: Set<string> | undefined;

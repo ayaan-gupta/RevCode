@@ -64,6 +64,17 @@ async function main(): Promise<void> {
     case "setup":
       process.exitCode = await runSetupCommand(withConfig(command.args));
       return;
+    case "race": {
+      let args = withConfig(command.args);
+      if (process.stdin.isTTY && process.stdout.isTTY && missingCredentials(args) && !(await runSetup({ reason: `${missingCredentials(args)?.message} Let's set one up.` }))) {
+        process.exitCode = 1;
+        return;
+      }
+      args = withConfig(command.args);
+      const { runRaceCommand } = await import("./commands/race.js");
+      process.exitCode = await runRaceCommand(args, command.options);
+      return;
+    }
     case "run": {
       let args = withConfig(command.args);
       if (!args.headless && process.stdin.isTTY && process.stdout.isTTY) {

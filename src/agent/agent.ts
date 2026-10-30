@@ -243,7 +243,7 @@ export class Agent {
     const next = order[(order.indexOf(current) + 1) % order.length] ?? "ask";
     rt.permissions.setMode(next);
     this.refreshStatus();
-    this.ui.hint(`Mode: ${next}`);
+    this.ui.hint(`Mode: ${next === "yolo" && rt.universe ? "private copy" : next}`);
   }
 
   // --- runtime ----------------------------------------------------------------
@@ -289,7 +289,7 @@ export class Agent {
       task,
     });
     this.initialMode = this.runtime.permissions.getMode();
-    this.renderer.setModeSource(() => this.runtime?.permissions.getMode() ?? "ask");
+    this.renderer.setModeSource(() => this.displayMode());
     this.refreshStatus();
     return this.runtime;
   }
@@ -297,8 +297,14 @@ export class Agent {
   private refreshStatus(): void {
     const rt = this.runtime;
     if (!rt) return;
-    this.renderer.setExtras(rt.universe ? [this.style.paint("accent", `${this.style.unicode ? "⌬" : "#"} universe ${rt.universe.id}`)] : []);
-    this.renderer.setMode(rt.permissions.getMode());
+    this.renderer.setExtras([]);
+    this.renderer.setMode(this.displayMode());
+  }
+
+  /** The permission mode as the status bar shows it: no-prompt mode in a universe is the private copy. */
+  private displayMode(): string {
+    const mode = this.runtime?.permissions.getMode() ?? "ask";
+    return mode === "yolo" && this.runtime?.universe ? "copy" : mode;
   }
 
   /** Built-in plus custom commands, as the prompt's completion menu and /help see them. */
@@ -697,7 +703,7 @@ export class Agent {
     const { style } = this;
     const choice = await this.ui.select({
       title: [`${style.paint("warn", style.glyphs.warn)} ${style.bold(`${plural(files, "changed file")} ${files === 1 ? "is" : "are"} only in the private copy.`)}`],
-      options: [{ label: "Apply to my project, then quit" }, { label: "Keep them for later and quit" }, { label: "Stay" }],
+      options: [{ label: "Apply to my project, then quit" }, { label: `Keep ${files === 1 ? "it" : "them"} for later and quit` }, { label: "Stay" }],
       hotkeys: { y: 0, a: 0, k: 1, n: 1, s: 2 },
       cancelIndex: 2,
       footer: "enter to select · esc to stay",
