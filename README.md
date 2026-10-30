@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  It codes in a parallel copy of your project, so there's nothing to approve and nothing it can wreck.<br>
+  Codes in a parallel copy of your project, so there's nothing to approve and nothing it can wreck.<br>
   Like what it did? <code>/land</code> it. Don't? It never happened.
 </p>
 
