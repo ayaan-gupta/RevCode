@@ -494,6 +494,9 @@ function fromOpenAiUsage(usage: OpenAiUsage | null | undefined): LlmUsage | unde
   if (typeof cached === "number") {
     result.cachedInputTokens = cached;
   }
+  if (typeof usage.cost === "number" && Number.isFinite(usage.cost) && usage.cost >= 0) {
+    result.costUsd = usage.cost;
+  }
   return result;
 }
 
@@ -562,6 +565,8 @@ interface OpenAiUsage {
   prompt_tokens_details?: { cached_tokens?: number } | null;
   /** DeepSeek-style cache accounting. */
   prompt_cache_hit_tokens?: number;
+  /** OpenRouter: what the call cost, in US dollars (credits). */
+  cost?: number;
 }
 
 type OpenAiErrorBody =

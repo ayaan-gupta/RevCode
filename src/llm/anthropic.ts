@@ -532,6 +532,9 @@ class UsageTracker {
     if (this.cacheRead !== undefined) {
       usage.cachedInputTokens = this.cacheRead;
     }
+    if (this.cacheWrite) {
+      usage.cacheWriteTokens = this.cacheWrite;
+    }
     return usage;
   }
 }

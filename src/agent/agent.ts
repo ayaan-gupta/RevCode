@@ -15,6 +15,7 @@ import type { CliArgs } from "../cli.js";
 import { loadConfig } from "../config/config.js";
 import { loadInstructions } from "../config/instructions.js";
 import { resolveProvider, type LlmToolCall } from "../llm/client.js";
+import { formatUsd } from "../llm/pricing.js";
 import { setRetryListener } from "../llm/retry.js";
 import { setShellOutputListener } from "../tools/shell-session.js";
 import { DEFAULT_PROFILE } from "../harness/profile.js";
@@ -43,6 +44,7 @@ import {
   landFlow,
   landOutcome,
 } from "../universe/ui.js";
+import { formatLandIf, landIfPasses, type LandIfOutcome } from "../universe/land-if.js";
 import { Universe } from "../universe/universe.js";
 import { VERSION } from "../version.js";
 import { runCommand, suggestedModels, type CommandContext } from "./commands.js";
@@ -263,7 +265,7 @@ export class Agent {
         universe = Universe.open(this.resumed.meta.universeId);
         if (universe.meta.status === "discarded") universe = undefined;
       } catch {
-        warn(`Universe ${this.resumed.meta.universeId} no longer exists; continuing without it.`);
+        warn(`The private copy from that session (${this.resumed.meta.universeId}) no longer exists.`);
       }
     }
 
@@ -283,6 +285,7 @@ export class Agent {
       sessionId: this.resumed?.meta.id,
       initialMessages: this.resumed?.messages,
       universe,
+      autoUniverse: this.interactive,
       task,
     });
     this.initialMode = this.runtime.permissions.getMode();
@@ -343,6 +346,8 @@ export class Agent {
 
     await this.writeTrajectory();
 
+    const landIf = this.args.landIf && runtime.universe ? await this.landIfPasses(runtime.universe, this.args.landIf, turn.stopReason) : undefined;
+
     const summary = {
       result: turn.finalContent,
       stopReason: turn.stopReason,
@@ -351,13 +356,28 @@ export class Agent {
       toolErrors: turn.toolErrors,
       durationMs: turn.durationMs,
       usage: turn.usage,
+      ...(runtime.price || runtime.spend.spentUsd > 0 ? { costUsd: Number(runtime.spend.spentUsd.toFixed(6)) } : {}),
       model: this.currentModel,
       profile: runtime.profileSource,
       universe: runtime.universe?.id,
+      ...(landIf
+        ? {
+            landIf: {
+              status: landIf.status,
+              landed: landIf.status === "landed",
+              files: landIf.files,
+              ...(landIf.conflicts.length ? { conflicts: landIf.conflicts } : {}),
+              ...(landIf.check ? { check: { command: landIf.check.command, passed: landIf.check.passed, exitCode: landIf.check.exitCode, timedOut: landIf.check.timedOut, durationMs: landIf.check.durationMs, tail: landIf.check.tail } } : {}),
+              ...(landIf.reason ? { reason: landIf.reason } : {}),
+            },
+          }
+        : {}),
       ...(turn.error ? { error: turn.error } : {}),
     };
     if (this.args.outputFormat === "json" || this.args.outputFormat === "stream-json") {
       console.log(JSON.stringify(this.args.outputFormat === "stream-json" ? { type: "result", ...summary } : summary));
+    } else if (landIf && runtime.universe) {
+      console.log(`\n${formatLandIf(landIf, runtime.universe, this.args.cwd).join("\n")}`);
     } else if (runtime.universe) {
       const stat = await runtime.universe.diffStat();
       console.log(`\nUniverse ${runtime.universe.id}: ${stat.files} file(s) changed (+${stat.insertions} −${stat.deletions}). Land with: revcode universes land ${runtime.universe.id}`);
@@ -366,6 +386,14 @@ export class Agent {
       process.stderr.write(`[revcode] ${turn.error ?? "model request failed"}\n`);
       process.exitCode = 1;
     }
+    if (landIf && landIf.status !== "landed" && landIf.status !== "nothing-to-land") {
+      process.exitCode = 1;
+    }
+  }
+
+  private landIfPasses(universe: Universe, command: string, stopReason: string): Promise<LandIfOutcome> {
+    if (this.args.outputFormat !== "json") process.stderr.write(`[revcode] checking: ${command}\n`);
+    return landIfPasses(universe, command, { stopReason, signal: this.turnAbort?.signal });
   }
 
   private headlessObserver(): EngineObserver {
@@ -439,7 +467,7 @@ export class Agent {
     });
     this.ui.mount();
 
-    this.ui.setBusy(true, "Starting…");
+    this.ui.setBusy(true, this.args.universe === false ? "Starting…" : "Copying your project…");
     let runtime: Runtime;
     try {
       runtime = await this.ensureRuntime();
@@ -451,6 +479,7 @@ export class Agent {
     while (true) {
       const next = await this.ui.nextInput();
       if (next.type === "eof" || shouldExit(next.text)) {
+        if (await this.offerLandBeforeExit()) continue;
         break;
       }
       await this.handleInput(next.text, next.display);
@@ -473,7 +502,10 @@ export class Agent {
       this.renderer.dimInfo("New here? /init writes an AGENTS.md so RevCode knows this project's build and test commands.");
     }
     if (runtime.universe) {
-      this.renderer.info(`${this.style.paint("accent", "Universe")} ${runtime.universe.id} — changes stay isolated until you /land them.`);
+      const mark = this.style.paint("accent", this.style.unicode ? "⌬" : "#");
+      this.renderer.info(`${mark} Working in a private copy of this project. Your files change only when you ${this.style.paint("accent", "/land")}.`);
+    } else if (runtime.universeSkipped) {
+      this.renderer.dimInfo(`Working in this folder directly (${runtime.universeSkipped}), so RevCode asks before changing files.`);
     }
     if (this.resumed) {
       this.renderer.success(`Resumed session ${this.resumed.meta.id} (${this.resumed.meta.title}).`);
@@ -585,6 +617,8 @@ export class Agent {
       this.renderer.dimInfo("Interrupted — tell RevCode what to do differently.");
     } else if (result.stopReason === "max_iterations") {
       this.renderer.warn(`Stopped after ${result.iterations} tool-loop iterations. Say "continue" to keep going.`);
+    } else if (result.stopReason === "cost_limit") {
+      this.renderer.warn(`Stopped at the spending cap (${formatUsd(rt.spend.spentUsd)} spent). Raise it with /cost <dollars> to keep going.`);
     }
 
     this.lastReceipt = receipt;
@@ -598,6 +632,7 @@ export class Agent {
       inputTokens: result.usage.inputTokens,
       outputTokens: result.usage.outputTokens,
       stopReason: result.stopReason,
+      costUsd: receipt.costUsd,
     });
     this.saveSessionSnapshot(rt);
     this.renderer.setContextPercent((rt.engine.estimatedTokens() / rt.profile.contextLimit) * 100);
@@ -645,6 +680,46 @@ export class Agent {
     }
   }
 
+  /**
+   * Leaving with changes that only exist in the copy: offer to apply them first.
+   * Returns true to stay in the session (the user chose to keep working).
+   */
+  private async offerLandBeforeExit(): Promise<boolean> {
+    const universe = this.runtime?.universe;
+    if (!universe || universe.meta.status !== "active" || !this.ui.interactive) return false;
+    let files = 0;
+    try {
+      files = (await universe.diffStat()).files;
+    } catch {
+      return false;
+    }
+    if (files === 0) return false;
+    const { style } = this;
+    const choice = await this.ui.select({
+      title: [`${style.paint("warn", style.glyphs.warn)} ${style.bold(`${plural(files, "changed file")} ${files === 1 ? "is" : "are"} only in the private copy.`)}`],
+      options: [{ label: "Apply to my project, then quit" }, { label: "Keep them for later and quit" }, { label: "Stay" }],
+      hotkeys: { y: 0, a: 0, k: 1, n: 1, s: 2 },
+      cancelIndex: 2,
+      footer: "enter to select · esc to stay",
+    });
+    if (choice === 2 || choice === undefined) return true;
+    if (choice === 0) {
+      const flow = await landFlow(universe, {
+        confirm: async (_plan, lines) => {
+          this.renderer.info(lines.join("\n"));
+          return true;
+        },
+      });
+      this.renderer.info(landOutcome(flow).join("\n"));
+      // Something could not be applied (a conflict): stay so the user can sort it out.
+      if (!flow.landed || (flow.result && flow.result.conflicts.length > 0)) {
+        this.renderer.dimInfo("Some changes were not applied. Fix them, /land again, or /exit to keep them in the copy for later.");
+        return true;
+      }
+    }
+    return false;
+  }
+
   private async exitSummary(): Promise<void> {
     const rt = this.runtime;
     const universe = rt?.universe;
@@ -653,8 +728,13 @@ export class Agent {
         const stat = await universe.diffStat();
         if (stat.files > 0) {
           this.renderer.info(
-            `Universe ${universe.id} holds ${plural(stat.files, "unlanded file change")} (+${stat.insertions} ${this.style.glyphs.minus}${stat.deletions}).\n  Review: revcode universes diff ${universe.id}\n  Land:   revcode universes land ${universe.id}\n  Resume: revcode -r ${rt?.sessionId}`,
+            `${plural(stat.files, "changed file")} (+${stat.insertions} ${this.style.glyphs.minus}${stat.deletions}) ${stat.files === 1 ? "is" : "are"} waiting in the private copy.\n  Pick up where you left off: revcode -r ${rt?.sessionId}\n  Or apply them now:        revcode universes land ${universe.id}`,
           );
+        } else if (universe.meta.landedCount === 0 && rt) {
+          // Nothing was ever changed here: don't leave an empty copy behind.
+          universe.purge();
+          rt.universe = undefined;
+          if (rt.turn.value > 0) this.saveSessionSnapshot(rt);
         }
       } catch {
         // best effort
@@ -663,7 +743,8 @@ export class Agent {
     let summary: string | undefined;
     if (rt && rt.turn.value > 0) {
       const usage = rt.engine.stats.usage;
-      summary = `${plural(rt.turn.value, "turn")} ${this.style.glyphs.dot} ${formatTokens(usage.inputTokens)} in ${this.style.glyphs.dot} ${formatTokens(usage.outputTokens)} out ${this.style.glyphs.dot} ${formatDuration(Date.now() - this.startedAt)}`;
+      const cost = rt.price || rt.spend.spentUsd > 0 ? ` ${this.style.glyphs.dot} ${formatUsd(rt.spend.spentUsd)}` : "";
+      summary = `${plural(rt.turn.value, "turn")} ${this.style.glyphs.dot} ${formatTokens(usage.inputTokens)} in ${this.style.glyphs.dot} ${formatTokens(usage.outputTokens)} out${cost} ${this.style.glyphs.dot} ${formatDuration(Date.now() - this.startedAt)}`;
     }
     this.renderer.goodbye(summary);
     if (rt && rt.turn.value > 0 && !rt.universe) this.renderer.dimInfo(`Resume with: revcode -r ${rt.sessionId}`);

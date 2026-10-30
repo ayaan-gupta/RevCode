@@ -26,7 +26,7 @@ export function builtinSlashCommands(sources: SlashCommandSources): SlashCommand
     { command: "/clear", description: "Clear the conversation and the screen" },
     { command: "/compact", description: "Free up context by trimming old tool output" },
     { command: "/context", description: "Show how much context is in use" },
-    { command: "/cost", description: "Show token usage for this session" },
+    { command: "/cost", description: "Show what this session cost; /cost 5 caps it at $5", args: "[dollars|off]" },
     { command: "/resume", description: "Resume an earlier session", args: "[id]", values: sources.sessions },
     { command: "/sessions", description: "List saved sessions for this directory" },
     { command: "/init", description: "Create or improve AGENTS.md for this project" },

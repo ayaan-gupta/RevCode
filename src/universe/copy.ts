@@ -12,7 +12,6 @@
 
 import {
   constants as fsConstants,
-  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -20,8 +19,11 @@ import {
   readlinkSync,
   symlinkSync,
 } from "node:fs";
+import { copyFile } from "node:fs/promises";
 import path from "node:path";
 import { runPlainGit } from "./git.js";
+
+const COPY_CONCURRENCY = 16;
 
 /** Directory names never copied and never snapshotted. */
 export const DEFAULT_EXCLUDES = [
@@ -89,6 +91,13 @@ export async function copyProject(source: string, dest: string, options: CopyOpt
 
   const excluded = new Set<string>(DEFAULT_EXCLUDES);
   const skip = (options.skipPaths ?? []).map((p) => path.resolve(p));
+  const madeDirs = new Set<string>();
+  const ensureDir = (dir: string): void => {
+    if (madeDirs.has(dir)) return;
+    mkdirSync(dir, { recursive: true });
+    madeDirs.add(dir);
+  };
+  const copies: Array<[string, string]> = [];
   for (const rel of relFiles) {
     if (hasExcludedSegment(rel, excluded)) {
       continue;
@@ -112,7 +121,7 @@ export async function copyProject(source: string, dest: string, options: CopyOpt
       );
     }
 
-    mkdirSync(path.dirname(to), { recursive: true });
+    ensureDir(path.dirname(to));
     if (stat.isSymbolicLink()) {
       try {
         symlinkSync(readlinkSync(from), to);
@@ -135,9 +144,25 @@ export async function copyProject(source: string, dest: string, options: CopyOpt
         `Project is larger than ${Math.round(limits.maxTotalBytes / 1024 / 1024)} MB; refusing to create a universe.`,
       );
     }
-    // FICLONE makes this a copy-on-write reflink on filesystems that support it.
-    copyFileSync(from, to, fsConstants.COPYFILE_FICLONE);
+    copies.push([from, to]);
   }
+
+  // Copy in parallel: most of the time goes to per-file syscalls, not bytes.
+  // FICLONE makes each one a copy-on-write reflink on filesystems that support it.
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < copies.length) {
+      const [from, to] = copies[next];
+      next += 1;
+      try {
+        await copyFile(from, to, fsConstants.COPYFILE_FICLONE);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; // vanished since listing
+        result.files -= 1;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(COPY_CONCURRENCY, copies.length) }, worker));
 
   for (const name of linkedNames) {
     const target = path.join(source, name);

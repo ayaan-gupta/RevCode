@@ -118,6 +118,30 @@ describe("revcode CLI (end to end)", () => {
     expect(landed.stdout).toContain("Landed: 1 written");
     expect(execFileSync("cat", [path.join(project, "a.txt")], { encoding: "utf8" })).toBe("after\n");
   });
+
+  it("--land-if applies the changes only when the check passes", () => {
+    const project = mkdtempSync(path.join(os.tmpdir(), "revcode-e2e-landif-"));
+    writeFileSync(path.join(project, "a.txt"), "before\n");
+    const task = (content: string) => `/tool write_file {"path":"a.txt","content":"${content}\\n"}`;
+    const base = ["run", "--provider", "local-test", "--model", "test", "--no-snapshot", "--no-instructions"];
+
+    const failed = revcode([...base, "--land-if", "grep -q good a.txt", task("bad")], project, home);
+    expect(failed.status).toBe(1);
+    expect(failed.stdout).toContain("✘ grep -q good a.txt failed (exit 1");
+    expect(failed.stdout).toContain("Nothing was applied");
+    expect(failed.stdout).toMatch(/revcode universes land u\d+/);
+    expect(execFileSync("cat", [path.join(project, "a.txt")], { encoding: "utf8" })).toBe("before\n");
+
+    const passed = revcode([...base, "--land-if", "grep -q good a.txt", "--output-format", "json", task("good")], project, home);
+    expect(passed.status).toBe(0);
+    const summary = JSON.parse(passed.stdout.trim().split("\n").at(-1) as string) as { landIf: Record<string, unknown> };
+    expect(summary.landIf).toMatchObject({ status: "landed", landed: true, files: ["a.txt"], check: { passed: true, exitCode: 0 } });
+    expect(execFileSync("cat", [path.join(project, "a.txt")], { encoding: "utf8" })).toBe("good\n");
+
+    const misuse = revcode(["--land-if", "true", "--provider", "local-test", "--model", "test"], project, home);
+    expect(misuse.status).toBe(1);
+    expect(misuse.stderr).toContain('revcode run "<task>" --land-if "<check>"');
+  });
 });
 
 describe("interactive session without a terminal (piped stdin)", () => {

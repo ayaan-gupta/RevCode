@@ -49,6 +49,8 @@ export interface Receipt {
     exitCode?: number | null;
   };
   tokens?: { input: number; output: number };
+  /** What the turn's model calls cost in US dollars, when the price is known. */
+  costUsd?: number;
 }
 
 const MUTATING_TOOLS = new Set(["write_file", "edit_file", "apply_patch", "edit_anchored", "delete_file"]);
@@ -144,6 +146,7 @@ export class ReceiptCollector {
     files?: ReceiptFile[];
     existedBefore?: Set<string>;
     tokens?: { input: number; output: number };
+    costUsd?: number;
   }): Receipt {
     const files: ReceiptFile[] =
       info.files ?? [...this.touched].map((path) => ({ path, status: "M" as const, insertions: 0, deletions: 0 }));
@@ -180,6 +183,7 @@ export class ReceiptCollector {
       testsAdded,
       verification: files.length === 0 && !lastCheck ? { ...verification, afterLastChange: true } : verification,
       tokens: info.tokens,
+      ...(info.costUsd !== undefined ? { costUsd: info.costUsd } : {}),
     };
 
     this.seq = 0;
@@ -232,9 +236,27 @@ export function formatReceipt(receipt: Receipt): string[] {
     lines.push(`⚠ modified an existing test file: ${file}`);
   }
   if (receipt.stopReason !== "complete") {
-    lines.push(`⚠ turn ended early: ${receipt.stopReason}`);
+    lines.push(`⚠ turn ended early: ${describeStop(receipt.stopReason)}`);
   }
   return lines;
+}
+
+/** Plain words for why a turn stopped. */
+export function describeStop(reason: string): string {
+  switch (reason) {
+    case "cost_limit":
+      return "spending cap reached";
+    case "time_budget":
+      return "time budget used up";
+    case "max_iterations":
+      return "step limit reached";
+    case "aborted":
+      return "interrupted";
+    case "error":
+      return "model error";
+    default:
+      return reason;
+  }
 }
 
 function trim(text: string, max: number): string {

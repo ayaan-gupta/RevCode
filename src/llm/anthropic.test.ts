@@ -438,7 +438,7 @@ describe("AnthropicClient non-streaming response", () => {
     expect(response).toEqual({
       content: "Reading.",
       toolCalls: [{ id: "toolu_1", name: "read_file", arguments: { path: "a.txt" } }],
-      usage: { inputTokens: 912, outputTokens: 40, cachedInputTokens: 800 },
+      usage: { inputTokens: 912, outputTokens: 40, cachedInputTokens: 800, cacheWriteTokens: 100 },
       finishReason: "tool_calls",
     });
   });
@@ -513,7 +513,7 @@ describe("AnthropicClient streaming", () => {
     expect(response).toEqual({
       content: "Hello",
       toolCalls: [],
-      usage: { inputTokens: 320, outputTokens: 9, cachedInputTokens: 300 },
+      usage: { inputTokens: 320, outputTokens: 9, cachedInputTokens: 300, cacheWriteTokens: 5 },
       finishReason: "stop",
     });
   });

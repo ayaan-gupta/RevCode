@@ -9,6 +9,7 @@
 
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { formatUsd } from "../llm/pricing.js";
 import { getBannerWidth, renderBanner } from "./banner.js";
 import { formatDuration, formatTokens, plural, sanitizeForDisplay } from "./fmt.js";
 import type { StatusModel } from "./frame.js";
@@ -52,6 +53,8 @@ export interface TurnSummary {
   inputTokens: number;
   outputTokens: number;
   stopReason: string;
+  /** What the turn cost, when the model's price is known. */
+  costUsd?: number;
 }
 
 export class TerminalRenderer {
@@ -321,6 +324,7 @@ export class TerminalRenderer {
     if (summary.toolCalls > 0) parts.push(plural(summary.toolCalls, "tool call"));
     const tokens = summary.inputTokens + summary.outputTokens;
     if (tokens > 0) parts.push(`${formatTokens(summary.inputTokens)} in ${style.glyphs.dot} ${formatTokens(summary.outputTokens)} out`);
+    if (summary.costUsd !== undefined && summary.costUsd > 0) parts.push(formatUsd(summary.costUsd));
     this.emit("meta", [style.dim(`${style.glyphs.bullet === "●" ? "✻" : "*"} ${parts.join(` ${style.glyphs.dot} `)}`)]);
   }
 

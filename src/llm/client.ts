@@ -52,6 +52,10 @@ export interface LlmUsage {
   outputTokens: number;
   /** Subset of `inputTokens` served from the provider's prompt cache, when reported. */
   cachedInputTokens?: number;
+  /** Subset of `inputTokens` written to the provider's prompt cache (Anthropic), when reported. */
+  cacheWriteTokens?: number;
+  /** What the provider says the call cost in US dollars (OpenRouter reports this). */
+  costUsd?: number;
 }
 
 export interface LlmResponse {

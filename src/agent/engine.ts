@@ -18,6 +18,7 @@ import type {
 } from "../llm/client.js";
 import type { HarnessProfile } from "../harness/profile.js";
 import type { TimeBudget } from "../harness/time-budget.js";
+import { isSpendCapError, type SpendCheck } from "../llm/spend.js";
 import type { ToolRegistry } from "../tools/index.js";
 import { estimateTokens, forceCompact, maybeCompact, type CompactionResult } from "./context.js";
 import { isContextOverflowError, summarizeHistory } from "./summarize.js";
@@ -89,13 +90,15 @@ export interface EngineOptions {
   finalGates?: FinalGate[];
   /** Wall-clock budget: injects time nudges and ends the run cleanly near the limit. */
   timeBudget?: TimeBudget;
+  /** Spending cap: consulted before each step (nudge near the cap, stop before crossing it). */
+  spend?: { check(): SpendCheck };
   /** Base delay before retrying a step after a transient stream failure (default 2000ms, scaled by attempt). */
   transientRetryDelayMs?: number;
   /** Resume from a prior conversation (must start with the system message). */
   initialMessages?: LlmMessage[];
 }
 
-export type StopReason = "complete" | "max_iterations" | "aborted" | "error" | "time_budget";
+export type StopReason = "complete" | "max_iterations" | "aborted" | "error" | "time_budget" | "cost_limit";
 
 export interface TurnResult {
   finalContent: string;
@@ -151,6 +154,7 @@ export class AgentEngine {
   private readonly middleware: ToolMiddleware[];
   private readonly finalGates: FinalGate[];
   private readonly timeBudget?: TimeBudget;
+  private readonly spend?: { check(): SpendCheck };
   private readonly transientRetryDelayMs: number;
   private recentSignatures: string[] = [];
   /** Conversation length right after the last LLM summary (avoids summarizing in a loop). */
@@ -169,6 +173,7 @@ export class AgentEngine {
     this.middleware = options.middleware ?? [];
     this.finalGates = options.finalGates ?? [];
     this.timeBudget = options.timeBudget;
+    this.spend = options.spend;
 
     this.messages =
       options.initialMessages && options.initialMessages.length > 0
@@ -278,6 +283,15 @@ export class AgentEngine {
         if (budget?.nudge) {
           this.pushHarnessMessage(budget.nudge);
         }
+        const spend = this.spend?.check();
+        if (spend?.stop) {
+          stopReason = "cost_limit";
+          this.observer.notice?.(spend.reason ?? "Spending cap reached; stopping with the current state.");
+          break;
+        }
+        if (spend?.nudge) {
+          this.pushHarnessMessage(spend.nudge);
+        }
 
         await this.compactIfNeeded(signal);
         this.observer.llmStart?.();
@@ -313,6 +327,11 @@ export class AgentEngine {
             break;
           }
           const message = error instanceof Error ? error.message : String(error);
+          if (isSpendCapError(error)) {
+            stopReason = "cost_limit";
+            this.observer.notice?.(message);
+            break;
+          }
           // The provider says the prompt is too long: shrink the history and retry this step.
           if (isContextOverflowError(message) && overflowRetries < 2) {
             overflowRetries += 1;
@@ -729,6 +748,7 @@ function addUsage(target: LlmUsage, delta?: LlmUsage): void {
   target.inputTokens += delta.inputTokens;
   target.outputTokens += delta.outputTokens;
   target.cachedInputTokens = (target.cachedInputTokens ?? 0) + (delta.cachedInputTokens ?? 0);
+  if (delta.cacheWriteTokens) target.cacheWriteTokens = (target.cacheWriteTokens ?? 0) + delta.cacheWriteTokens;
 }
 
 function stableStringify(value: unknown): string {

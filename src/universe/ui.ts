@@ -5,7 +5,7 @@
  */
 
 import path from "node:path";
-import type { ConflictStrategy, LandItem, LandPlan } from "./land.js";
+import type { ConflictStrategy, LandItem, LandPlan, LandResult } from "./land.js";
 import { applyLand, planLand, summarizePlan } from "./land.js";
 import type { Checkpoint, FileChange, Universe, UniverseMeta } from "./universe.js";
 
@@ -95,6 +95,8 @@ export interface LandFlowOptions {
 export interface LandFlowResult {
   lines: string[];
   landed: boolean;
+  /** What was written, deleted, merged or left in conflict (when the land ran). */
+  result?: LandResult;
 }
 
 /** What to print once `confirm` has already shown the plan, so the plan isn't printed twice. */
@@ -126,7 +128,7 @@ export async function landFlow(universe: Universe, options: LandFlowOptions): Pr
       "Resolve by editing your project, or re-run with --markers (write conflict markers) or --theirs (take the universe version).",
     );
   }
-  return { lines: out, landed: true };
+  return { lines: out, landed: true, result };
 }
 
 function shortPath(p: string): string {

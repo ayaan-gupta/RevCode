@@ -39,7 +39,9 @@ export async function runTrackedTurn(
     universe.recordPrompt(turnNo, options.recordedPrompt ?? prompt);
   }
 
+  const spentBefore = rt.spend.spentUsd;
   const result = await rt.engine.runTurn(prompt, options.signal);
+  const costUsd = rt.price || rt.spend.spentUsd > spentBefore ? rt.spend.spentUsd - spentBefore : undefined;
 
   let files: ReceiptFile[] | undefined;
   let existedBefore: Set<string> | undefined;
@@ -61,6 +63,7 @@ export async function runTrackedTurn(
     files,
     existedBefore,
     tokens: { input: result.usage.inputTokens, output: result.usage.outputTokens },
+    costUsd,
   });
   universe?.appendTimeline({ type: "receipt", ...receipt });
   return { result, receipt, receiptLines: formatReceipt(receipt) };

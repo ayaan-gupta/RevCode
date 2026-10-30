@@ -27,6 +27,8 @@ import { TimeBudget } from "../harness/time-budget.js";
 import { createVerifyGate, type VerifyGate } from "../harness/verify-gate.js";
 import { HookRunner } from "../hooks/index.js";
 import { createLlmClient, resolveProvider, type LlmClient, type LlmMessage } from "../llm/client.js";
+import { priceFor, type ModelPrice } from "../llm/pricing.js";
+import { MeteredLlm, SpendMeter } from "../llm/spend.js";
 import { loadMcpConfig, McpManager } from "../mcp/index.js";
 import {
   createSkillTool,
@@ -41,7 +43,9 @@ import { ToolRegistry } from "../tools/index.js";
 import { viewImage, viewImageToolDefinition, type ViewImageInput } from "../tools/view-image.js";
 import { createUniverseRecorder } from "../universe/recorder.js";
 import { ReceiptCollector } from "../universe/receipts.js";
+import { autoUniverse } from "../universe/auto.js";
 import { Universe } from "../universe/universe.js";
+import { reachesOutside } from "./outside.js";
 import { AgentEngine, type EngineObserver, type ToolMiddleware } from "./engine.js";
 import { PermissionManager, type Approver, type PermissionMode } from "./permissions.js";
 import { newSessionId } from "./session.js";
@@ -67,6 +71,10 @@ export interface RuntimeOptions {
   hermetic?: boolean;
   /** Task text for the completion audit (headless). */
   task?: string;
+  /** Share a spending meter across runtimes (race attempts). Default: a new one capped at `args.maxCost`. */
+  spend?: SpendMeter;
+  /** Interactive sessions: work in a copy when `args.universe` is unset and the project allows it. */
+  autoUniverse?: boolean;
 }
 
 export interface Runtime {
@@ -77,6 +85,8 @@ export interface Runtime {
   profileSource: string;
   provider: string;
   universe?: Universe;
+  /** Why this session works directly in the project although copies are the default. */
+  universeSkipped?: string;
   collector: ReceiptCollector;
   hooks?: HookRunner;
   mcp?: McpManager;
@@ -86,6 +96,10 @@ export interface Runtime {
   verify?: VerifyGate;
   /** Directory the agent works in (the universe copy, when there is one). */
   cwd: string;
+  /** What model calls have cost so far, and the cap (if any). */
+  spend: SpendMeter;
+  /** Price of the current model, when known. */
+  price?: ModelPrice;
   sessionId: string;
   turn: { value: number };
   /** Context returned by SessionStart hooks, to prepend to the first turn. */
@@ -118,6 +132,16 @@ export function resolveProfile(
   return stored ? { profile: stored.profile, source: "tuned" } : { profile: DEFAULT_PROFILE, source: "default" };
 }
 
+/** Shell and terminal commands that would reach past a universe's copy (see outside.ts). */
+function outsideCheckFor(universe: Universe): (tool: string, args: Record<string, unknown>) => string | undefined {
+  const ctx = { projectRoot: universe.meta.projectRoot, copyDir: universe.workDir };
+  return (tool, args) => {
+    if (tool !== "shell" && tool !== "terminal") return undefined;
+    const text = typeof args.command === "string" ? args.command : typeof args.text === "string" ? args.text : undefined;
+    return text ? reachesOutside(text, ctx) : undefined;
+  };
+}
+
 export function defaultPermissionMode(args: CliArgs, inUniverse: boolean): PermissionMode {
   if (args.permissionMode) return args.permissionMode;
   if (args.headless || inUniverse) return "yolo";
@@ -131,7 +155,15 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   const provider = resolveProvider(args.provider, args.model);
   const sessionId = options.sessionId ?? newSessionId();
 
-  let llm = options.llm ?? createLlmClient({ model: args.model, provider: args.provider, baseUrl: args.baseUrl });
+  const spend = options.spend ?? new SpendMeter(args.maxCost);
+  const price = priceFor(args.model, provider, args.pricing);
+  let currentModel = args.model;
+  if (spend.capUsd !== undefined && !price && provider !== "openrouter") {
+    throw new Error(
+      `--max-cost needs to know what ${args.model} costs. Add it to .revcode/config.json, e.g. "pricing": { "${args.model}": { "input": 1.0, "output": 3.0 } } ($ per million tokens).`,
+    );
+  }
+  let llm: LlmClient = new MeteredLlm(options.llm ?? createLlmClient({ model: args.model, provider: args.provider, baseUrl: args.baseUrl }), spend, price, args.model);
   let runtimeLlm = llm;
 
   const resolved = options.profile
@@ -141,8 +173,13 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
 
   // --- universe -------------------------------------------------------------
   let universe = options.universe;
+  let universeSkipped: string | undefined;
   if (!universe && args.universe) {
     universe = await Universe.create({ projectRoot: args.cwd, provider, model: args.model });
+  } else if (!universe && args.universe === undefined && options.autoUniverse) {
+    const auto = await autoUniverse(args.cwd, { provider, model: args.model });
+    universe = auto.universe;
+    universeSkipped = auto.skipped;
   }
   const cwd = universe ? universe.workDir : args.cwd;
 
@@ -243,6 +280,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     approver: options.approver,
     isReadOnly: (name) => tools.isReadOnly(name),
     hookDecision: (callId) => hooks?.lastPermissionDecision(callId),
+    outsideCheck: universe ? outsideCheckFor(universe) : undefined,
     // "Don't ask again" in an interactive session is remembered for this project.
     onRuleAdded:
       options.interactive && options.approver && !hermetic
@@ -287,7 +325,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
   }
   if (universe) {
     extraSections.push(
-      `# Universe\nYou are working inside an isolated copy of the user's project (original: ${universe.meta.projectRoot}). Every change you make is recorded and stays in this copy; nothing reaches the real project until the user lands it. Use paths relative to the working directory and never reference the original project path.`,
+      `# Universe\nYou are working in a private copy of the user's project. Every change you make is recorded and stays in this copy; nothing reaches the real project until the user lands it, so work freely: edit, build and run tests here. Use paths relative to the working directory; never use the original project's path.${universe.meta.projectGit ? " The copy has its own git repository with the project's full history (git log, diff, blame and status work). Don't commit unless the user asks: landing applies file changes, not commits." : ""} Actions that reach outside the copy (pushing, publishing, deploying, sudo, installing software, writing elsewhere on disk) need the user's approval.`,
     );
   }
   const promptBase = {
@@ -332,6 +370,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     middleware,
     finalGates,
     timeBudget,
+    spend: { check: () => (runtimeLlm instanceof MeteredLlm ? runtimeLlm.check() : { stop: false }) },
     initialMessages: options.initialMessages,
   });
 
@@ -360,6 +399,7 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     profileSource: resolved.source,
     provider,
     universe,
+    universeSkipped,
     collector,
     hooks,
     mcp,
@@ -368,18 +408,28 @@ export async function createRuntime(options: RuntimeOptions): Promise<Runtime> {
     completion,
     verify,
     cwd,
+    spend,
+    price,
     sessionId,
     turn,
     sessionStartContext,
     getLlm: () => runtimeLlm,
     setLlm(next) {
-      llm = next;
-      runtimeLlm = next;
-      engine.setLlm(next);
+      // Everything the session calls is metered, including a client swapped in later.
+      const metered = next instanceof MeteredLlm ? next : new MeteredLlm(next, spend, runtime.price, currentModel);
+      llm = metered;
+      runtimeLlm = metered;
+      engine.setLlm(metered);
     },
     switchModel(model) {
       const nextProvider = resolveProvider(args.provider, model);
-      const nextLlm = createLlmClient({ model, provider: args.provider, baseUrl: args.baseUrl });
+      const nextPrice = priceFor(model, nextProvider, args.pricing);
+      if (spend.capUsd !== undefined && !nextPrice && nextProvider !== "openrouter") {
+        throw new Error(`The spending cap needs a price for ${model}; add it under "pricing" in .revcode/config.json.`);
+      }
+      const nextLlm = new MeteredLlm(createLlmClient({ model, provider: args.provider, baseUrl: args.baseUrl }), spend, nextPrice, model);
+      currentModel = model;
+      runtime.price = nextPrice;
       const next = options.profile
         ? { profile: options.profile, source: "override" }
         : resolveProfile(args.profile, nextProvider, model);

@@ -54,12 +54,17 @@ export interface PermissionOptions {
   hookDecision?: (callId: string) => "allow" | "deny" | "ask" | undefined;
   /** Called when the user chose "don't ask again": a chance to persist the new allow rule. */
   onRuleAdded?: (rule: string) => void;
+  /**
+   * In a universe: why a call would reach outside the private copy (push, deploy,
+   * sudo, the real project…), or undefined. Such calls ask even in yolo mode.
+   */
+  outsideCheck?: (tool: string, args: Record<string, unknown>) => string | undefined;
 }
 
 export type Evaluation =
   | { action: "allow"; reason?: string }
   | { action: "deny"; reason: string }
-  | { action: "ask"; reason: string; summary: string };
+  | { action: "ask"; reason: string; summary: string; outside?: boolean };
 
 const EDIT_TOOLS = new Set(["write_file", "edit_file", "apply_patch", "edit_anchored", "delete_file"]);
 const ALWAYS_ALLOWED = new Set(["update_plan", "use_skill", "task"]);
@@ -72,6 +77,7 @@ export class PermissionManager {
   private readonly isReadOnly: (toolName: string) => boolean;
   private readonly hookDecision?: PermissionOptions["hookDecision"];
   private readonly onRuleAdded?: PermissionOptions["onRuleAdded"];
+  private readonly outsideCheck?: PermissionOptions["outsideCheck"];
   /** Serializes prompts so two approvals never fight over the terminal. */
   private promptQueue: Promise<unknown> = Promise.resolve();
 
@@ -83,6 +89,7 @@ export class PermissionManager {
     this.isReadOnly = options.isReadOnly ?? (() => false);
     this.hookDecision = options.hookDecision;
     this.onRuleAdded = options.onRuleAdded;
+    this.outsideCheck = options.outsideCheck;
   }
 
   getMode(): PermissionMode {
@@ -154,6 +161,11 @@ export class PermissionManager {
       return { action: "allow" };
     }
     if (this.mode === "yolo") {
+      const outside = this.outsideCheck?.(tool, args);
+      if (outside) {
+        const summary = tool === "shell" ? String(args.command ?? "") : `${tool} ${truncate(String(args.command ?? JSON.stringify(args)), 120)}`;
+        return { action: "ask", reason: `This reaches outside the copy: it ${outside}.`, summary, outside: true };
+      }
       return { action: "allow" };
     }
 
@@ -206,6 +218,12 @@ export class PermissionManager {
     }
 
     if (!this.approver) {
+      if (evaluation.outside) {
+        return {
+          allow: false,
+          reason: `${evaluation.reason} That is not allowed in an unattended run. Do the work inside the copy instead; if the user wants this, they can allow it with --allow "${call.name}(${call.name === "shell" ? `${commandPrefix(String(call.arguments.command ?? ""))}*` : "*"})".`,
+        };
+      }
       return {
         allow: false,
         reason: `${evaluation.reason} Approval is required but this session is non-interactive. Re-run with --yolo (or --mode accept-edits) to allow it.`,

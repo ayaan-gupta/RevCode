@@ -11,6 +11,7 @@ import path from "node:path";
 import type { CliArgs } from "../cli.js";
 import { loadInstructions } from "../config/instructions.js";
 import { saveUserConfig } from "../config/config.js";
+import { formatUsd } from "../llm/pricing.js";
 import { copyToClipboard, osc52Sequence } from "../tui/clipboard.js";
 import { formatDuration, formatTokens, plural } from "../tui/fmt.js";
 import type { TerminalRenderer } from "../tui/render.js";
@@ -243,9 +244,34 @@ export async function runCommand(ctx: CommandContext, name: string, arg: string)
 
     case "/cost":
     case "/usage": {
+      if (arg) {
+        const wanted = arg.trim().replace(/^\$/, "").toLowerCase();
+        if (wanted === "off" || wanted === "none") {
+          rt.spend.setCap(undefined);
+          say("Spending cap removed.");
+          return true;
+        }
+        const cap = Number(wanted);
+        if (!Number.isFinite(cap) || cap <= 0) {
+          renderer.error("Usage: /cost [dollars | off]   e.g. /cost 5 stops before this session spends more than $5");
+          return true;
+        }
+        if (!rt.price && rt.provider !== "openrouter") {
+          renderer.error(`No price is known for ${ctx.getModel()}, so a cap can't be enforced. Add it under "pricing" in .revcode/config.json.`);
+          return true;
+        }
+        rt.spend.setCap(cap);
+        say(`Spending cap set to ${formatUsd(cap)} for this session (${formatUsd(rt.spend.spentUsd)} spent so far).`);
+        return true;
+      }
       const { usage } = rt.engine.stats;
       const cached = usage.cachedInputTokens ?? 0;
+      const cap = rt.spend.capUsd;
+      const costText = rt.price || rt.spend.spentUsd > 0
+        ? `${formatUsd(rt.spend.spentUsd)}${cap !== undefined ? ` of a ${formatUsd(cap)} cap` : ""}`
+        : `unknown (no price for ${ctx.getModel()}; add one under "pricing" in .revcode/config.json)`;
       const pairs: Array<[string, string]> = [
+        ["Cost", costText],
         ["Input", `${usage.inputTokens.toLocaleString("en-US")} tokens${cached > 0 ? ` (${cached.toLocaleString("en-US")} cached)` : ""}`],
         ["Output", `${usage.outputTokens.toLocaleString("en-US")} tokens`],
         ["Model calls", String(rt.engine.stats.apiCalls)],

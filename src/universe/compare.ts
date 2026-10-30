@@ -6,8 +6,8 @@
  * passes it. The verification run is the honest A/B signal; the rest is context.
  */
 
-import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { runCheck } from "./check.js";
 import { runShadowGit } from "./git.js";
 import type { Receipt } from "./receipts.js";
 import type { Universe } from "./universe.js";
@@ -55,30 +55,10 @@ async function summarize(universe: Universe, options: { verify?: string; verifyT
     testsModified: [...new Set(receipts.flatMap((r) => r.testsModified))],
   };
   if (options.verify && existsSync(universe.workDir)) {
-    summary.verify = await runVerify(universe.workDir, options.verify, (options.verifyTimeoutSec ?? 120) * 1000);
+    const check = await runCheck(universe.workDir, options.verify, { timeoutMs: (options.verifyTimeoutSec ?? 600) * 1000 });
+    summary.verify = { exitCode: check.exitCode, passed: check.passed, tail: check.tail };
   }
   return summary;
-}
-
-function runVerify(cwd: string, command: string, timeoutMs: number): Promise<{ exitCode: number | null; passed: boolean; tail: string }> {
-  return new Promise((resolve) => {
-    const child = spawn("bash", ["-c", command], { cwd, stdio: ["ignore", "pipe", "pipe"] });
-    let out = "";
-    const append = (chunk: Buffer): void => {
-      out = (out + chunk.toString("utf8")).slice(-4000);
-    };
-    child.stdout.on("data", append);
-    child.stderr.on("data", append);
-    const timer = setTimeout(() => child.kill("SIGKILL"), timeoutMs);
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      resolve({ exitCode: code, passed: code === 0, tail: out.trim().split("\n").slice(-6).join("\n") });
-    });
-    child.on("error", (error) => {
-      clearTimeout(timer);
-      resolve({ exitCode: null, passed: false, tail: String(error) });
-    });
-  });
 }
 
 async function treeDifferences(a: Universe, b: Universe): Promise<Comparison["differing"]> {

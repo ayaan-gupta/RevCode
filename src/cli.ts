@@ -15,6 +15,7 @@
 import { readFileSync } from "node:fs";
 import { isLlmProvider, LLM_PROVIDERS, type LlmProvider } from "./llm/client.js";
 import type { LoadedConfig } from "./config/config.js";
+import type { PriceTable } from "./llm/pricing.js";
 import { PERMISSION_MODES, type PermissionMode } from "./agent/permissions.js";
 
 export const DEFAULT_MODEL = "glm-5.2";
@@ -66,6 +67,12 @@ export interface CliArgs {
   /** "auto" | "default" | path to a profile JSON. */
   profile?: string;
   timeBudgetSec?: number;
+  /** Stop before model calls cost more than this many US dollars (whole session or run). */
+  maxCost?: number;
+  /** Headless: work in a copy, run this check there, and apply the changes only if it passes. */
+  landIf?: string;
+  /** Extra / overriding model prices from config ($ per million tokens). */
+  pricing?: PriceTable;
   outputFormat?: OutputFormat;
   snapshot?: boolean;
   mcp?: boolean;
@@ -136,6 +143,8 @@ const FLAGS: Record<string, FlagSpec> = {
   "--universe": { key: "universe", kind: "boolean", aliases: ["-u"] },
   "--profile": { key: "profile", kind: "string" },
   "--time-budget": { key: "timeBudgetSec", kind: "float" },
+  "--max-cost": { key: "maxCost", kind: "float" },
+  "--land-if": { key: "landIf", kind: "string" },
   "--output-format": { key: "outputFormat", kind: "string" },
   "--snapshot": { key: "snapshot", kind: "boolean" },
   "--mcp": { key: "mcp", kind: "boolean" },
@@ -351,9 +360,20 @@ function parseFlags(
     args.resume = args.resume ?? "";
     explicit.add("resume");
   }
+  if (args.landIf !== undefined) {
+    if (!args.landIf.trim()) throw new Error('--land-if needs a check command, e.g. --land-if "npm test"');
+    if (explicit.has("universe") && args.universe === false) {
+      throw new Error("--land-if works on a private copy of the project; it can't be combined with --no-universe.");
+    }
+    args.universe = true;
+    explicit.add("universe");
+  }
   // `-p "task"` / `--prompt-file f` mean "run this and exit", as in other agent CLIs.
   if ((args.prompt !== undefined || args.promptFile !== undefined) && !explicit.has("headless")) {
     args.headless = true;
+  }
+  if (args.landIf !== undefined && !args.headless && !options.allowPositional) {
+    throw new Error('--land-if runs one task unattended: revcode run "<task>" --land-if "<check>"');
   }
   args.explicit = [...explicit];
   return { args, positional, tune: tune as Partial<TuneOptions> };
@@ -445,6 +465,8 @@ export function resolveArgs(args: CliArgs, loaded: LoadedConfig, env: NodeJS.Pro
     const fromEnv = env.REVCODE_TIME_BUDGET_SEC ? Number(env.REVCODE_TIME_BUDGET_SEC) : undefined;
     out.timeBudgetSec = config.timeBudgetSec ?? (fromEnv && Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : undefined);
   }
+  if (!explicit.has("maxCost") && config.maxCost !== undefined) out.maxCost = config.maxCost;
+  if (config.pricing) out.pricing = { ...config.pricing };
   if (!explicit.has("snapshot")) out.snapshot = config.snapshot ?? true;
   if (!explicit.has("mcp")) out.mcp = config.mcp ?? true;
   if (!explicit.has("hooks")) out.hooks = config.hooks ?? true;

@@ -99,7 +99,7 @@ describe("createRuntime", () => {
     runtimes.push(rt);
     expect(rt.universe).toBeDefined();
     expect(rt.permissions.getMode()).toBe("yolo");
-    expect(rt.engine.messages[0].content).toContain("isolated copy");
+    expect(rt.engine.messages[0].content).toContain("private copy of the user's project");
 
     const { receipt } = await runTrackedTurn(rt, "change it");
     expect(readFileSync(path.join(project, "a.txt"), "utf8")).toBe("original\n");

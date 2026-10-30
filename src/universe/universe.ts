@@ -30,6 +30,7 @@ import path from "node:path";
 import { revcodeHome, safeSegment, universesDir } from "../config/paths.js";
 import { copyProject, DEFAULT_EXCLUDES, type CopyOptions } from "./copy.js";
 import { gitText, runPlainGit, runShadowGit, shadowHandle, type ShadowGitHandle } from "./git.js";
+import { mirrorProjectGit } from "./project-git.js";
 
 export type UniverseStatus = "active" | "landed" | "discarded";
 
@@ -49,6 +50,8 @@ export interface UniverseMeta {
   /** Dependency dirs symlinked (shared) with the real project. */
   linked: string[];
   skippedLarge: string[];
+  /** The copy has its own git repository mirroring the project's history. */
+  projectGit?: boolean;
   landedCount: number;
   lastLandedAt?: string;
 }
@@ -98,6 +101,8 @@ export interface CheckpointInfo {
 
 export interface CreateUniverseOptions extends CopyOptions {
   projectRoot: string;
+  /** Mirror the project's git repository into the copy (default true). */
+  projectGit?: boolean;
   id?: string;
   name?: string;
   provider?: string;
@@ -143,6 +148,7 @@ export class Universe {
         skipPaths: [...(options.skipPaths ?? []), revcodeHome()],
       });
       await initShadow(handle);
+      const projectGit = options.projectGit === false ? false : await mirrorProjectGit(projectRoot, handle.workTree, { missing: copied.skippedLarge, linked: copied.linked });
 
       const now = new Date().toISOString();
       const meta: UniverseMeta = {
@@ -157,6 +163,7 @@ export class Universe {
         model: options.model,
         linked: copied.linked,
         skippedLarge: copied.skippedLarge,
+        projectGit,
         landedCount: 0,
       };
       const universe = new Universe(meta, dir);
@@ -342,6 +349,7 @@ export class Universe {
           symlinkSync(target, path.join(handle.workTree, name), "dir");
         }
       }
+      const projectGit = this.meta.projectGit ? await mirrorProjectGit(this.meta.projectRoot, handle.workTree, { missing: this.meta.skippedLarge, linked: this.meta.linked }) : false;
 
       const now = new Date().toISOString();
       const meta: UniverseMeta = {
@@ -353,6 +361,7 @@ export class Universe {
         status: "active",
         parentId: this.id,
         forkedFromSha: source,
+        projectGit,
         landedCount: 0,
         lastLandedAt: undefined,
       };

@@ -9,6 +9,7 @@
 
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { validatePriceTable, type PriceTable } from "../llm/pricing.js";
 import { revcodeHome } from "./paths.js";
 
 export interface RevcodeConfig {
@@ -18,6 +19,10 @@ export interface RevcodeConfig {
   maxIterations?: number;
   /** Seconds. Enables time-budget nudges and a clean stop near the limit. */
   timeBudgetSec?: number;
+  /** US dollars. Stop before model calls cost more than this (per session or run). */
+  maxCost?: number;
+  /** Model prices in $ per million tokens, added to / overriding the built-in table. */
+  pricing?: PriceTable;
   /** "auto" (use the tuned profile for the model, if any), "default", or a path to a profile JSON. */
   profile?: string;
   permissions?: {
@@ -117,6 +122,12 @@ export function validateConfig(raw: unknown): { config: RevcodeConfig; problems:
   }
   positive("maxIterations");
   positive("timeBudgetSec");
+  positive("maxCost");
+  if (input.pricing !== undefined) {
+    const { table, problems: priceProblems } = validatePriceTable(input.pricing);
+    config.pricing = table;
+    problems.push(...priceProblems);
+  }
   bool("universe");
   bool("snapshot");
   bool("mcp");
@@ -160,7 +171,8 @@ export function mergeConfig(base: RevcodeConfig, over: RevcodeConfig): RevcodeCo
           deny: [...(base.permissions?.deny ?? []), ...(over.permissions?.deny ?? [])],
         }
       : undefined;
-  return { ...base, ...over, ...(permissions ? { permissions } : {}) };
+  const pricing = base.pricing || over.pricing ? { ...base.pricing, ...over.pricing } : undefined;
+  return { ...base, ...over, ...(permissions ? { permissions } : {}), ...(pricing ? { pricing } : {}) };
 }
 
 /** Merge `patch` into the user-level config file (`~/.revcode/config.json`), creating it if needed. */
