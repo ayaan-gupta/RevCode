@@ -116,7 +116,7 @@ export async function runRace(options: RaceOptions): Promise<RaceResult> {
         universe,
         spend,
         llm: options.llmFor?.(attempt.spec),
-        observer: attemptObserver(attempt, update),
+        observer: attemptObserver(attempt, update, () => runtime?.costUsd()),
         warn,
         task,
       });
@@ -124,11 +124,14 @@ export async function runRace(options: RaceOptions): Promise<RaceResult> {
       const stopShells = (): void => rt.tools.interruptShell();
       options.signal?.addEventListener("abort", stopShells, { once: true });
       try {
+        const before = rt.engine.messages.length;
         const { result, receipt } = await runTrackedTurn(rt, task, { signal: options.signal });
         attempt.stopReason = result.stopReason;
         attempt.error = result.error;
         attempt.receipt = receipt;
-        attempt.finalMessage = result.finalContent;
+        // The agent's first final answer is its summary; later ones answer the completion audit.
+        const answers = rt.engine.messages.slice(before).filter((m) => m.role === "assistant" && !(m.toolCalls?.length) && m.content.trim());
+        attempt.finalMessage = answers[0]?.content ?? result.finalContent;
       } finally {
         options.signal?.removeEventListener("abort", stopShells);
       }
@@ -179,10 +182,11 @@ export async function runRace(options: RaceOptions): Promise<RaceResult> {
   return { attempts, ranked, winner, spentUsd: spend.spentUsd };
 }
 
-function attemptObserver(attempt: Attempt, update: () => void): EngineObserver {
+function attemptObserver(attempt: Attempt, update: () => void, cost: () => number | undefined): EngineObserver {
   return {
     toolCall: (call) => {
       attempt.steps += 1;
+      attempt.costUsd = cost() ?? attempt.costUsd;
       const detail = String(call.arguments.command ?? call.arguments.path ?? call.arguments.pattern ?? "").replace(/\s+/g, " ");
       attempt.activity = `${call.name}${detail ? ` ${detail}` : ""}`;
       update();

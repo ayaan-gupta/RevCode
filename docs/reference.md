@@ -20,9 +20,12 @@ npm run bundle           # single-file dist/revcode.mjs (what the benchmark adap
 Default model is **`glm-5.2`** via Z.ai. Examples:
 
 ```bash
-revcode                                   # interactive
-revcode --universe                        # interactive, inside a Parallel Universe
+revcode                                   # interactive (on a private copy in a git project)
+revcode --no-universe                     # interactive, directly in the project
 revcode run "fix the failing tests"       # one headless task
+revcode run "bump deps" --land-if "npm test"   # apply only if the check passes
+revcode race "fix the flaky test" --tries 3    # parallel attempts, best one applied
+revcode --max-cost 2                      # stop before spending more than $2
 revcode --provider anthropic --model claude-sonnet-5-5
 revcode --provider ollama --model qwen2.5-coder
 revcode --provider openai-compat --base-url http://localhost:8000/v1 --model my-model
@@ -37,7 +40,19 @@ Behind an HTTP(S) proxy, set `HTTPS_PROXY` (and `NO_PROXY`) as usual — RevCode
 
 ## Safety & permissions
 
-Modes: `ask` (default interactive), `accept-edits`, `plan` (read-only), `yolo` (default for headless runs and inside Universes). Choosing *"don't ask again for `git commit*`"* at a prompt remembers the rule for the project in `.revcode/config.local.json` (kept out of git via `.git/info/exclude`); *"allow all edits this session"* is just accept-edits mode. `--allow "shell(git status*)"` / `--deny "shell(git push*)"` rules; deny always wins. A short list of catastrophic commands (`rm -rf /`, `mkfs`, `dd` to a disk, fork bombs) is refused in **every** mode. Project hooks and MCP servers run commands, so they only load for directories you've trusted.
+Modes: `ask` (default when working directly in a project), `accept-edits`, `plan` (read-only), `yolo` (default for headless runs and inside a private copy, where the status bar shows "private copy · edits freely"). In a copy, commands that reach outside it (push, publish, deploy, `sudo`, ssh, global installs, the real project folder, writes elsewhere on disk) still ask; see [universes](universes.md#what-still-asks). Choosing *"don't ask again for `git commit*`"* at a prompt remembers the rule for the project in `.revcode/config.local.json` (kept out of git via `.git/info/exclude`); *"allow all edits this session"* is just accept-edits mode. `--allow "shell(git status*)"` / `--deny "shell(git push*)"` rules; deny always wins. A short list of catastrophic commands (`rm -rf /`, `mkfs`, `dd` to a disk, fork bombs) is refused in **every** mode. Project hooks and MCP servers run commands, so they only load for directories you've trusted.
+
+## Cost and spending caps
+
+When a model's price is known, the turn summary, receipts, `/cost` and `--output-format json` show what it cost. `--max-cost <dollars>` (or `"maxCost"` in config) stops before model calls would cost more than that for the whole session or run; at 80% the model is told to wrap up. In a session, `/cost 5` sets a $5 cap and `/cost off` removes it.
+
+Built-in prices cover the Claude models, `glm-5.2` and `gpt-5.5` at each provider's pay-as-you-go rates. Local models (Ollama) are free, and OpenRouter reports its own costs. Add or override prices, in $ per million tokens:
+
+```json
+{ "pricing": { "my-model": { "input": 0.5, "output": 1.5, "cachedInput": 0.05 } } }
+```
+
+On a subscription plan (for example Z.ai's GLM Coding Plan) the amounts show usage at list prices, not what you're billed.
 
 ## Extending
 
@@ -56,12 +71,13 @@ src/
 ├── harness/    profile (Dyno's knobs), prompt builder, gates, time budget, env snapshot
 ├── llm/        providers (OpenAI-compatible, Anthropic), SSE, retry
 ├── tools/      file tools, shell session, edit modes, apply-patch, anchored edits
-├── universe/   Parallel Universes: snapshots, land/merge, receipts, replay, compare, export
+├── universe/   private copies: copy + git mirror, snapshots, land/merge, land-if, receipts, replay, compare, export
+├── race/       parallel attempts, ranking, scoreboard
 ├── dyno/       task suite, runner, tuner, report
 ├── tui/        live prompt region, line editor, key parser, markdown/diff/tool rendering, themes
 ├── mcp/ skills/ hooks/ config/ commands/
 eval/           Harbor adapter for Terminal-Bench
-docs/           universes, dyno, terminal-bench, memory design
+docs/           universes, race, dyno, terminal-bench, memory design
 ```
 
 ## Scripts

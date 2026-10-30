@@ -34,7 +34,7 @@ While a permission prompt is open it replaces the prompt in that same block.
 | Ctrl+O · Ctrl+L · Ctrl+Z | more tool output · clear screen · suspend |
 | Alt+B/F · Ctrl+A/E · Ctrl+W/U/K/Y · Ctrl+_ | word/line motion · delete/yank · undo |
 
-Slash commands: `/help` `/status` `/model` `/mode` `/plan` `/clear` `/compact` `/context` `/cost` `/resume` `/sessions` `/init` `/review` `/diff` `/copy` `/export` `/verbose` `/vim` `/theme` `/permissions` `/mcp` `/skills` `/hooks` `/memory` `/tools` `/profile` `/doctor` `/receipt` `/exit` — plus the Parallel Universe commands ([docs/universes.md](universes.md)) and any custom commands or skills. Shell completion: `revcode completion bash|zsh|fish`.
+Slash commands: `/help` `/status` `/model` `/mode` `/plan` `/clear` `/compact` `/context` `/cost` `/resume` `/sessions` `/init` `/review` `/diff` `/copy` `/export` `/verbose` `/vim` `/theme` `/permissions` `/mcp` `/skills` `/hooks` `/memory` `/tools` `/profile` `/doctor` `/receipt` `/exit` — plus the private-copy commands ([docs/universes.md](universes.md)) and any custom commands or skills. Shell completion: `revcode completion bash|zsh|fish`.
 
 Shift+Enter needs a terminal that reports modified keys (kitty keyboard protocol): iTerm2, Ghostty, WezTerm, kitty, foot, Windows Terminal, recent VS Code. Elsewhere use **Ctrl+J** or `\` + Enter. Terminal notes, environment switches and how it is built follow.
 

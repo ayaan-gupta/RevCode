@@ -73,6 +73,7 @@ describe("runRace", () => {
     expect(result.attempts.map((a) => a.check?.passed)).toEqual([false, true, true]);
     expect(result.ranked.map((a) => a.spec.n)).toEqual([2, 3, 1]);
     expect(result.winner?.spec.n).toBe(2);
+    expect(result.winner?.finalMessage).toBe("answer is 42"); // its summary, not its reply to the completion audit
     expect(duplicates(result.ranked).get(3)).toBe(2);
     expect(readFileSync(path.join(project, "answer.txt"), "utf8")).toBe("?\n"); // nothing applied yet
 

@@ -203,16 +203,22 @@ async function isGitWorkTree(dir: string): Promise<boolean> {
   }
 }
 
-/** Tracked + untracked-not-ignored files, relative to `dir` (which may be a subdirectory of the repo). */
+/**
+ * Tracked + untracked-not-ignored files, relative to `dir` (which may be a subdirectory of the repo),
+ * plus ignored `.env` files: apps and tests usually need them, and being ignored they never land.
+ */
 async function listGitFiles(dir: string): Promise<string[]> {
   const { stdout } = await runPlainGit(
     ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--full-name", "--", "."],
     { cwd: dir },
   );
+  const env = await runPlainGit(
+    ["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--full-name", "--", ":(glob)**/.env", ":(glob)**/.env.*"],
+    { cwd: dir, allowFailure: true },
+  );
   const { stdout: prefixOut } = await runPlainGit(["rev-parse", "--show-prefix"], { cwd: dir });
   const prefix = prefixOut.toString("utf8").trim();
-  const files = stdout
-    .toString("utf8")
+  const files = `${stdout.toString("utf8")}\0${env.code === 0 ? env.stdout.toString("utf8") : ""}`
     .split("\0")
     .filter(Boolean)
     .map((file) => (prefix && file.startsWith(prefix) ? file.slice(prefix.length) : file));

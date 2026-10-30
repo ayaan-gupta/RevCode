@@ -1,10 +1,10 @@
 /** `revcode completion <bash|zsh|fish>`: shell completion scripts generated from the real flag table. */
 
-import { flagNames } from "../cli.js";
+import { flagNames, raceFlagNames } from "../cli.js";
 import { PERMISSION_MODES } from "../agent/permissions.js";
 import { LLM_PROVIDERS } from "../llm/client.js";
 
-const SUBCOMMANDS = ["run", "tune", "universes", "sessions", "profile", "setup", "completion", "help", "version"];
+const SUBCOMMANDS = ["run", "race", "tune", "universes", "sessions", "profile", "setup", "completion", "help", "version"];
 const FILE_FLAGS = ["--cwd", "--prompt-file", "--trajectory-out", "--profile"];
 
 function valuesFor(flag: string): string[] | undefined {
@@ -23,7 +23,12 @@ function valuesFor(flag: string): string[] | undefined {
 }
 
 export function completionScript(shell: string): string | undefined {
-  const { long, short, valued } = flagNames();
+  const base = flagNames();
+  // Race flags are offered everywhere: completion scripts don't track the subcommand.
+  const raceOnly = raceFlagNames().filter((flag) => !base.long.includes(flag));
+  const long = [...base.long, ...raceOnly];
+  const valued = [...base.valued, ...raceOnly.filter((flag) => flag !== "--yes")];
+  const short = base.short;
   const flags = [...long, ...short];
   if (shell === "bash") {
     const cases = ["--provider", "--mode", "--output-format", "--theme"]

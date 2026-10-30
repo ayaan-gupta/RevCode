@@ -1,11 +1,14 @@
-"""Regenerate the README's terminal visuals (docs/assets/hero.svg, logo-dark.svg, logo-light.svg) from a real session.
+"""Regenerate the README's terminal visuals (docs/assets/hero.svg, race.svg, logo-dark.svg,
+logo-light.svg) from real sessions.
 
-Runs the bundled CLI in a pty against a live model, inside a Parallel Universe, on a tiny project
-with a failing test; records what the terminal showed, and renders chosen moments as vector SVG.
+Runs the bundled CLI in a pty against a live model on a tiny project with a failing test (the
+session works in a private copy, as it does by default), records what the terminal showed, and
+renders chosen moments as vector SVG. The race visual records `revcode race` on the same project.
 
     pip install pyte pillow
     npm run bundle
     Z_AI_API_KEY=... python3 scripts/tui/readme_assets.py            # or --provider/--model flags
+    python3 scripts/tui/readme_assets.py --only race                 # just one visual
     python3 scripts/tui/readme_assets.py --tape /tmp/tape.pkl        # re-render from a saved recording
 
 Needs a model that can fix the bug, so the result is a real transcript, not a script. Frames are
@@ -66,7 +69,7 @@ def record(args):
     for key in ("Z_AI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"):
         if os.environ.get(key):
             env[key] = os.environ[key]
-    argv = ["node", os.path.join(ROOT, "dist", "revcode.mjs"), "--universe", "--no-snapshot", "--no-mcp"] + args.rest
+    argv = ["node", os.path.join(ROOT, "dist", "revcode.mjs"), "--no-snapshot", "--no-mcp"] + args.rest
     s = Session(argv, cols=COLS, rows=ROWS, cwd=proj, env=env)
     tape, t0, last = [], time.time(), [None]
 
@@ -165,6 +168,77 @@ def render(tape, out):
     print("wrote", os.path.join(out, "hero.svg"), f"({len(svg) // 1024} KB) and logo-dark/light.svg")
 
 
+RACE_TASK = "slugify is broken. make the tests pass"
+RACE_COLS, RACE_ROWS = 100, 21
+
+
+def record_race(args):
+    """`revcode race` on the demo project: the live board, the ranking, and applying the winner."""
+    home = args.home
+    os.makedirs(home, exist_ok=True)
+    proj = make_project(home)
+    revcode_home = tempfile.mkdtemp(prefix="revcode-home-")
+    env = {"HOME": home, "REVCODE_HOME": revcode_home}
+    for key in ("Z_AI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY", "HTTPS_PROXY", "HTTP_PROXY", "NO_PROXY", "SSL_CERT_FILE", "NODE_EXTRA_CA_CERTS"):
+        if os.environ.get(key):
+            env[key] = os.environ[key]
+    argv = ["node", os.path.join(ROOT, "dist", "revcode.mjs"), "race", "--no-mcp", "--tries", "3", "--max-cost", "1"] + args.rest + [RACE_TASK]
+    s = Session(argv, cols=RACE_COLS, rows=RACE_ROWS, cwd=proj, env=env)
+    tape, t0, last = [], time.time(), [None]
+
+    def cap(label):
+        text = s.text()
+        if text != last[0]:
+            tape.append((round(time.time() - t0, 2), label, snapshot(s.screen, cursor=False), text))
+            last[0] = text
+
+    end = time.time() + 600
+    while time.time() < end:
+        s.pump(0.25)
+        cap("race")
+        if "Apply #" in s.text():
+            break
+    else:
+        sys.exit("the race never finished:\n" + s.text())
+    for _ in range(6):
+        s.pump(0.25)
+        cap("ranked")
+    s.send("y", settle=0.1)
+    s.key("enter", settle=0.1)
+    for _ in range(16):
+        s.pump(0.25)
+        cap("applied")
+    s.close()
+    shutil.rmtree(revcode_home, ignore_errors=True)
+    return tape
+
+
+def pick_race(tape):
+    """Moments of the race: everyone working, checks running, results coming in, the ranking, applied."""
+    working = [i for i, f in enumerate(tape) if f[3].count("working") >= 3]
+    checking = [i for i, f in enumerate(tape) if "checking" in f[3]]
+    some_done = [i for i, f in enumerate(tape) if "passed" in f[3] and ("working" in f[3] or "checking" in f[3])]
+    ranked = first(tape, lambda t: "Apply #" in t)
+    applied = first(tape, lambda t: "Applied #" in t, ranked)
+    moments = []
+    if working:
+        moments += [(working[len(working) // 4], 1.4), (working[(3 * len(working)) // 4], 1.4)]
+    if checking:
+        moments.append((checking[0], 1.2))
+    if some_done:
+        moments.append((some_done[len(some_done) // 2], 1.4))
+    return sorted(moments) + [(ranked, 3.6), (applied, 3.6)]
+
+
+def render_race(tape, out):
+    chosen = pick_race(tape)
+    frames = [tape[i][2] for i, _ in chosen]
+    svg = render_svg(frames, title="revcode race", durations=[d for _, d in chosen], rows=RACE_ROWS, backdrop=True)
+    with open(os.path.join(out, "race.svg"), "w") as f:
+        f.write(svg)
+    print("wrote", os.path.join(out, "race.svg"), f"({len(svg) // 1024} KB)")
+
+
 def banner_frame(theme):
     """The start-up banner in a theme's colors. Needs no model: the provider points nowhere."""
     home = tempfile.mkdtemp(prefix="revcode-banner-")
@@ -194,14 +268,20 @@ def main():
     ap.add_argument("--out", default=os.path.join(ROOT, "docs", "assets"))
     ap.add_argument("--home", default="/home/dev", help="HOME for the demo (paths show as ~/slugify)")
     ap.add_argument("--tape", help="pickle file: load the recording if present, else save one there")
+    ap.add_argument("--only", choices=["hero", "race"], help="regenerate just one visual (hero includes the logos)")
     args, args.rest = ap.parse_known_args()  # anything else goes to revcode, e.g. --provider zai --model glm-5.2
-    if args.tape and os.path.exists(args.tape):
-        tape = pickle.load(open(args.tape, "rb"))
-    else:
-        tape = record(args)
-        if args.tape:
-            pickle.dump(tape, open(args.tape, "wb"))
-    render(tape, args.out)
+    os.makedirs(args.out, exist_ok=True)
+    for kind, recorder, renderer in (("hero", record, render), ("race", record_race, render_race)):
+        if args.only and args.only != kind:
+            continue
+        path = f"{args.tape}.{kind}" if args.tape else None
+        if path and os.path.exists(path):
+            tape = pickle.load(open(path, "rb"))
+        else:
+            tape = recorder(args)
+            if path:
+                pickle.dump(tape, open(path, "wb"))
+        renderer(tape, args.out)
 
 
 if __name__ == "__main__":

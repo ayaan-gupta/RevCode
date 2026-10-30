@@ -19,7 +19,9 @@ function gitProject(): string {
   const dir = mkdtempSync(path.join(os.tmpdir(), "revcode-auto-"));
   git(dir, "init", "-q");
   writeFileSync(path.join(dir, "app.js"), "console.log(1)\n");
-  writeFileSync(path.join(dir, ".gitignore"), "node_modules/\n");
+  writeFileSync(path.join(dir, ".gitignore"), "node_modules/\n.env\n*.log\n");
+  writeFileSync(path.join(dir, ".env"), "API_URL=http://localhost\n");
+  writeFileSync(path.join(dir, "debug.log"), "noise\n");
   git(dir, "add", "-A");
   git(dir, "commit", "-qm", "first");
   git(dir, "remote", "add", "origin", "https://example.com/acme/app.git");
@@ -54,6 +56,10 @@ describe("autoUniverse", () => {
     expect(git(work, "branch", "--show-current")).toBe(git(project, "branch", "--show-current"));
     expect(git(work, "status", "--porcelain")).toBe(git(project, "status", "--porcelain"));
     expect(git(work, "remote", "get-url", "origin")).toBe("https://example.com/acme/app.git");
+
+    // Ignored .env files come along (apps need them); other ignored files don't.
+    expect(readFileSync(path.join(work, ".env"), "utf8")).toBe("API_URL=http://localhost\n");
+    expect(existsSync(path.join(work, "debug.log"))).toBe(false);
 
     // Commits in the copy stay in the copy.
     writeFileSync(path.join(work, "new.txt"), "x\n");

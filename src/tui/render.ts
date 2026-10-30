@@ -28,11 +28,12 @@ const TIPS = [
   "Type @ to mention a file — its contents are attached to your message.",
   "Press Esc to interrupt a running task; messages you type meanwhile are queued.",
   "Shift+Tab cycles permission modes: ask → accept edits → plan.",
-  "Start with `revcode --universe` to let the agent work in an isolated copy you can review and land.",
+  "/diff shows what changed in the copy; /rewind <n> goes back to any step.",
+  "`revcode race \"<task>\"` runs several attempts at once and applies the one that passes your tests.",
+  "/cost shows what the session cost; /cost 5 stops it before it spends more than $5.",
   "Ctrl+R searches your prompt history; Up and Down walk through it.",
   "Ctrl+O shows more of each tool's output.",
   "Start a line with ! to run a shell command yourself.",
-  "/init writes an AGENTS.md so RevCode learns your project's conventions.",
   "/resume reopens an earlier session; /compact frees up context.",
   "Paste large text freely — it collapses to a placeholder and is sent in full.",
   "Put project rules in AGENTS.md; they are loaded into every session.",
@@ -190,7 +191,7 @@ export class TerminalRenderer {
     lines.push(`  ${style.paint("accent", info.model)} ${style.dim(`(${info.provider})`)}  ${style.dim(style.glyphs.dot)}  ${style.dim(shortenPath(info.cwd, process.env.HOME, room))}`);
     const tip = TIPS[Math.floor(Math.random() * TIPS.length)];
     lines.push(`  ${style.dim(`Tip: ${tip}`)}`);
-    lines.push("");
+    // No trailing blank row: whatever comes next is separated by `emit`.
     this.ui.print(lines.join("\n"));
     this.lastKind = "block";
   }

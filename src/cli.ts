@@ -509,11 +509,14 @@ export function resolveArgs(args: CliArgs, loaded: LoadedConfig, env: NodeJS.Pro
   return out;
 }
 
-export const HELP_TEXT = `RevCode — an AI coding agent for the terminal
+export const HELP_TEXT = `RevCode — a coding agent that works on a private copy of your project
 
 Usage:
-  revcode [flags]                 interactive session
-  revcode run "<task>" [flags]    run one task headlessly
+  revcode [flags]                 interactive session (in a git project it works on a private copy;
+                                  your files change only when you /land)
+  revcode run "<task>" [flags]    run one task and exit
+  revcode race "<task>" [flags]   several attempts at once, each in its own copy; checks them
+                                  with your tests and applies the best one
   revcode tune [flags]            Dyno: benchmark & tune the harness for --model
   revcode universes <action>      list | show | diff | land | discard | share | replay | compare | purge
   revcode sessions                list saved sessions
@@ -526,14 +529,16 @@ Common flags:
       --provider <name>     ${LLM_PROVIDERS.join(" | ")}
       --base-url <url>      API base URL (OpenAI-compatible servers, proxies)
       --cwd <path>          working directory
-  -p, --prompt <text>       task for --headless
-      --prompt-file <path>  read the task for --headless from a file
+  -p, --prompt <text>       task to run and exit
+      --prompt-file <path>  read that task from a file
       --headless            run one task and exit
       --output-format <f>   text | json | stream-json (headless)
-      --mode <mode>         ask | accept-edits | plan | yolo   (default: ask; yolo when headless)
+      --mode <mode>         ask | accept-edits | plan | yolo   (default: ask; yolo when headless or in a copy)
       --allow <rule,...>    permission allow rules, e.g. "shell(git status*)"
       --deny <rule,...>     permission deny rules
-  -u, --universe            run inside an isolated, recorded Parallel Universe; land changes when happy
+  -u, --universe            always work on a private copy (--no-universe: always work in the project)
+      --max-cost <dollars>  stop before model calls cost more than this (whole session or run)
+      --land-if "<check>"   with run: work on a copy, run the check there, apply only if it passes
   -c, --continue            resume the latest session in this directory
   -r, --resume [id]         resume a session
       --profile <p>         auto | default | path to a profile JSON
@@ -544,6 +549,13 @@ Common flags:
       --verbose             show longer tool output
       --vim                 Vim-style editing in the prompt (toggle later with /vim)
       --no-snapshot --no-mcp --no-hooks --no-instructions   disable the startup environment snapshot / MCP servers / hooks / AGENTS.md
+
+Race flags:
+      --tries <n>           attempts (default 3, or one per model)
+      --models <a,b,...>    models to use, e.g. glm-5.2,anthropic:claude-sonnet-5-5
+      --check "<command>"   how to tell a good result (default: the project's test command)
+      --parallel <n>        attempts running at once (default: all)
+  -y, --yes                 apply the best attempt without asking
 
 Environment: Z_AI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, OLLAMA_HOST,
 REVCODE_BASE_URL / REVCODE_API_KEY (generic OpenAI-compatible), REVCODE_HOME, REVCODE_TIME_BUDGET_SEC.
