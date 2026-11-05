@@ -34,13 +34,23 @@
 ## Install
 
 ```bash
-git clone https://github.com/ayaan-gupta/RevCode && cd RevCode
-npm install && npm run bundle
-cp dist/revcode.mjs ~/.local/bin/revcode   # it's one file, put it anywhere on your PATH
-revcode                                    # first run asks which model to use
+curl -fsSL https://raw.githubusercontent.com/ayaan-gupta/RevCode/master/install.sh | sh
 ```
 
-Node 20+, `git`, `ripgrep` and `bash`. Linux or macOS.
+Then `cd` into a project and run `revcode`. The first run asks which model to use.
+
+Needs Node 20+ and git, on Linux or macOS. ripgrep makes search faster if you have it.
+
+<details>
+<summary>Build from source instead</summary>
+
+```bash
+git clone https://github.com/ayaan-gupta/RevCode && cd RevCode
+npm install && npm run bundle
+mkdir -p ~/.local/bin && cp dist/revcode.mjs ~/.local/bin/revcode
+```
+
+</details>
 
 ## Parallel universes
 

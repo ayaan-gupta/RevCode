@@ -1,0 +1,31 @@
+name: Release
+
+# Push a tag like v0.1.0 and this builds dist/revcode.mjs and attaches it to a GitHub release.
+# install.sh downloads that file, so users never need to build anything.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run bundle
+      - name: Smoke-test the bundle
+        run: node dist/revcode.mjs --version && node dist/revcode.mjs --help > /dev/null
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/revcode.mjs \
+            --title "RevCode $GITHUB_REF_NAME" \
+            --notes "Install or update: \`curl -fsSL https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/master/install.sh | sh\`"

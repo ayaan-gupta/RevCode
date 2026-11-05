@@ -9,7 +9,6 @@
   "scripts": {
     "build": "tsc",
     "bundle": "node scripts/bundle.mjs",
-    "prepare": "npm run bundle",
     "dev": "tsx src/index.ts",
     "lint": "eslint src/",
     "test": "vitest run",
