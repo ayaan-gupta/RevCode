@@ -1,14 +1,15 @@
 {
   "name": "revcode",
   "version": "0.1.0",
-  "description": "AI-powered coding agent for the terminal — Parallel Universes and self-tuning (Dyno)",
-  "main": "dist/index.js",
+  "description": "Your new coding agent (working in a parallel universe)",
+  "main": "dist/revcode.mjs",
   "bin": {
-    "revcode": "dist/index.js"
+    "revcode": "dist/revcode.mjs"
   },
   "scripts": {
     "build": "tsc",
     "bundle": "node scripts/bundle.mjs",
+    "prepare": "npm run bundle",
     "dev": "tsx src/index.ts",
     "lint": "eslint src/",
     "test": "vitest run",
@@ -49,5 +50,10 @@
     "LICENSE",
     "THIRD_PARTY_NOTICES.md",
     "docs"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ayaan-gupta/RevCode.git"
+  },
+  "homepage": "https://github.com/ayaan-gupta/RevCode#readme"
 }

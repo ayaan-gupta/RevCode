@@ -139,7 +139,7 @@ describe("createLlmClient: missing configuration", () => {
 
   it("keeps the documented z.ai error message", () => {
     expect(() => createLlmClient({ provider: "zai", model: "glm-5.2" })).toThrow(
-      "No LLM client configured for model: glm-5.2. Set Z_AI_API_KEY",
+      "No LLM client configured for model: glm-5.2. Run `revcode setup`",
     );
   });
 

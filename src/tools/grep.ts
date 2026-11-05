@@ -27,7 +27,12 @@ export interface GrepToolOptions {
   cwd?: string;
   /** Allow paths outside the working directory. */
   unrestricted?: boolean;
+  /** ripgrep binary (tests point this at a missing one to exercise the fallback). */
+  rg?: string;
 }
+
+/** Directories plain `grep -r` would otherwise wade through (ripgrep skips them via .gitignore). */
+const FALLBACK_SKIP_DIRS = [".git", "node_modules", ".venv", "venv", "__pycache__", "dist", "build", "target", ".next", ".cache"];
 
 export async function grepFiles(
   input: GrepToolInput,
@@ -53,7 +58,7 @@ export async function grepFiles(
   args.push("--", searchPath);
 
   try {
-    const { stdout, stderr } = await execFileAsync("rg", args, {
+    const { stdout, stderr } = await execFileAsync(options.rg ?? "rg", args, {
       cwd,
       maxBuffer: MAX_OUTPUT_CHARS * 2,
     });
@@ -62,6 +67,9 @@ export async function grepFiles(
   } catch (error) {
     if (isProcessError(error) && error.code === 1) {
       return { matches: "(no matches)", exitCode: 1 };
+    }
+    if (isProcessError(error) && error.code === "ENOENT") {
+      return grepFallback(normalizedInput, searchPath, cwd);
     }
 
     if (isProcessError(error) && typeof error.stdout === "string") {
@@ -76,6 +84,23 @@ export async function grepFiles(
         error instanceof Error ? error.message : String(error)
       }`,
     );
+  }
+}
+
+/** ripgrep isn't installed: plain `grep -r`, same output shape. */
+async function grepFallback(input: GrepToolInput, searchPath: string, cwd: string): Promise<GrepToolOutput> {
+  const args = ["-r", "-n", "-I", "-E", ...FALLBACK_SKIP_DIRS.map((dir) => `--exclude-dir=${dir}`)];
+  if (input.glob) args.push(`--include=${input.glob.replace(/^\*\*\//, "")}`);
+  if (input.context !== undefined) args.push("-C", String(input.context));
+  if (input.head_limit !== undefined) args.push("-m", String(input.head_limit));
+  args.push("--", input.pattern, path.relative(cwd, searchPath) || ".");
+  try {
+    const { stdout } = await execFileAsync("grep", args, { cwd, maxBuffer: MAX_OUTPUT_CHARS * 4 });
+    return { matches: truncateOutput(stdout.trim().replace(/^\.\//gm, "") || "(no matches)"), exitCode: 0 };
+  } catch (error) {
+    if (isProcessError(error) && error.code === 1) return { matches: "(no matches)", exitCode: 1 };
+    const detail = isProcessError(error) && typeof error.stderr === "string" && error.stderr ? error.stderr.trim() : error instanceof Error ? error.message : String(error);
+    throw new Error(`grep failed for ${formatRelativePath(searchPath, cwd)}: ${detail}`);
   }
 }
 

@@ -227,7 +227,7 @@ function openAiCompatConfig(
       const apiKey = options.apiKey ?? getZaiApiKey();
       if (!apiKey) {
         throw new Error(
-          `No LLM client configured for model: ${options.model}. Set Z_AI_API_KEY (or ZAI_API_KEY) or use --provider local-test.`,
+          `No LLM client configured for model: ${options.model}. Run \`revcode setup\` to pick a provider and save a key, or set Z_AI_API_KEY.`,
         );
       }
       return {
